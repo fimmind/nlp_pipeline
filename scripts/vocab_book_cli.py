@@ -94,6 +94,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--list-models", action="store_true", help="Print available models and exit.")
     parser.add_argument("--cache-dir", type=Path, default=Path("data/cache/vocab_book_cli"))
     parser.add_argument("--disable-cache", action="store_true", help="Disable model/probability caches.")
+    parser.add_argument(
+        "--add-words",
+        type=str,
+        default=None,
+        help="Add/update known/unknown labels using entries like \"apple=known,banana=unknown\".",
+    )
+    parser.add_argument(
+        "--add-words-interactive",
+        action="store_true",
+        help="Interactively append or update additional known/unknown word labels in the saved profile.",
+    )
     return parser.parse_args()
 
 
@@ -292,11 +303,133 @@ def probability_cache_path(cache_dir: Path, model_key: str, data_fp: str, profil
     return cache_dir / "probabilities" / f"{model_key}_{data_fp}_{profile_fp}.npy"
 
 
+def state_cache_path(cache_dir: Path, model_key: str, data_fp: str, profile_name: str) -> Path:
+    safe_profile = re.sub(r"[^A-Za-z0-9_.-]+", "_", profile_name.strip())
+    return cache_dir / "states" / f"{model_key}_{data_fp}_{safe_profile}.pkl"
+
+
+def invalidate_probability_caches(cache_dir: Path, data_fp: str) -> int:
+    probs_dir = cache_dir / "probabilities"
+    if not probs_dir.exists():
+        return 0
+    removed = 0
+    for path in probs_dir.glob(f"*_{data_fp}_*.npy"):
+        path.unlink(missing_ok=True)
+        removed += 1
+    return removed
+
+
+def _is_incremental_extension(
+    cached_ids: np.ndarray,
+    cached_labels: np.ndarray,
+    current_ids: np.ndarray,
+    current_labels: np.ndarray,
+) -> tuple[bool, np.ndarray, np.ndarray]:
+    cached_map = {int(word_id): int(label) for word_id, label in zip(cached_ids.tolist(), cached_labels.tolist())}
+    current_map = {int(word_id): int(label) for word_id, label in zip(current_ids.tolist(), current_labels.tolist())}
+    for word_id, label in cached_map.items():
+        if word_id not in current_map:
+            return False, np.zeros(0, dtype=np.int32), np.zeros(0, dtype=np.int32)
+        if int(current_map[word_id]) != int(label):
+            return False, np.zeros(0, dtype=np.int32), np.zeros(0, dtype=np.int32)
+    delta_ids: list[int] = []
+    delta_labels: list[int] = []
+    for word_id, label in zip(current_ids.tolist(), current_labels.tolist()):
+        if int(word_id) not in cached_map:
+            delta_ids.append(int(word_id))
+            delta_labels.append(int(label))
+    return True, np.array(delta_ids, dtype=np.int32), np.array(delta_labels, dtype=np.int32)
+
+
+def load_state_cache(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    with path.open("rb") as f:
+        payload = pickle.load(f)
+    if not isinstance(payload, dict):
+        return None
+    required = {"observed_word_ids", "observed_labels", "user_state", "probs_all_words"}
+    if not required.issubset(set(payload.keys())):
+        return None
+    return payload
+
+
+def save_state_cache(
+    path: Path,
+    observed_word_ids: np.ndarray,
+    observed_labels: np.ndarray,
+    user_state: UserState,
+    probs_all_words: np.ndarray,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "observed_word_ids": observed_word_ids.astype(np.int32),
+        "observed_labels": observed_labels.astype(np.int32),
+        "user_state": user_state,
+        "probs_all_words": probs_all_words.astype(np.float32),
+    }
+    with path.open("wb") as f:
+        pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+def build_state_and_probabilities(
+    estimator: Estimator,
+    observed_word_ids: np.ndarray,
+    observed_labels: np.ndarray,
+    n_words: int,
+    cache_dir: Path,
+    model_key: str,
+    data_fp: str,
+    profile_name: str,
+    disable_cache: bool,
+) -> tuple[UserState, np.ndarray]:
+    cache_path = state_cache_path(cache_dir, model_key, data_fp, profile_name)
+    state_payload = None if disable_cache else load_state_cache(cache_path)
+    if state_payload is not None:
+        cached_ids = np.asarray(state_payload["observed_word_ids"], dtype=np.int32)
+        cached_labels = np.asarray(state_payload["observed_labels"], dtype=np.int32)
+        cached_state = state_payload["user_state"]
+        cached_probs = np.asarray(state_payload["probs_all_words"], dtype=np.float32)
+        if cached_ids.shape == observed_word_ids.shape and cached_labels.shape == observed_labels.shape:
+            if np.array_equal(cached_ids, observed_word_ids) and np.array_equal(cached_labels, observed_labels):
+                if cached_probs.shape == (n_words,):
+                    print(f"Loaded cached latent state and probabilities: {cache_path}")
+                    return cached_state, cached_probs
+        is_extension, delta_ids, delta_labels = _is_incremental_extension(
+            cached_ids=cached_ids,
+            cached_labels=cached_labels,
+            current_ids=observed_word_ids,
+            current_labels=observed_labels,
+        )
+        if is_extension:
+            if len(delta_ids) == 0 and cached_probs.shape == (n_words,):
+                print(f"Loaded cached latent state and probabilities: {cache_path}")
+                return cached_state, cached_probs
+            updated_state = estimator.update_user_state(cached_state, delta_ids, delta_labels)
+            probs = estimator.predict_proba(updated_state, np.arange(n_words, dtype=np.int32)).astype(np.float32)
+            if probs.shape != (n_words,):
+                raise ValueError(f"invalid probability shape: expected {(n_words,)}, got {probs.shape}")
+            if not disable_cache:
+                save_state_cache(cache_path, observed_word_ids, observed_labels, updated_state, probs)
+                print(f"Incrementally updated latent state cache: {cache_path}")
+            return updated_state, probs
+        print("Detected profile edits that changed existing labels; rebuilding latent state from scratch.")
+    state = estimator.initialize_user_state()
+    state = estimator.update_user_state(state, observed_word_ids, observed_labels)
+    probs = estimator.predict_proba(state, np.arange(n_words, dtype=np.int32)).astype(np.float32)
+    if probs.shape != (n_words,):
+        raise ValueError(f"invalid probability shape: expected {(n_words,)}, got {probs.shape}")
+    if not disable_cache:
+        save_state_cache(cache_path, observed_word_ids, observed_labels, state, probs)
+        print(f"Saved latent state cache: {cache_path}")
+    return state, probs
+
+
 def load_or_fit_estimator(
     model_key: str,
     seed: int,
-    response_frame: pd.DataFrame,
-    x_words: np.ndarray,
+    response_frame: pd.DataFrame | None,
+    x_words: np.ndarray | None,
     cache_dir: Path,
     data_fp: str,
     disable_cache: bool,
@@ -307,6 +440,8 @@ def load_or_fit_estimator(
             estimator = pickle.load(f)
         print(f"Loaded cached fitted model: {cache_path}")
         return estimator
+    if response_frame is None or x_words is None:
+        raise ValueError("response_frame and x_words are required when fitting a non-cached model")
     estimator = build_estimator(model_key, seed)
     estimator.fit(response_frame, x_words)
     if not disable_cache:
@@ -447,6 +582,89 @@ def collect_answers_from_string(answer_string: str, expected_len: int) -> np.nda
     if len(compact) != expected_len:
         raise ValueError(f"answer-string must contain exactly {expected_len} answers after removing separators; got {len(compact)}")
     return np.array([parse_answer_char(ch) for ch in compact], dtype=np.int32)
+
+
+def parse_additional_entries(
+    add_words: str,
+    lower_to_idx: dict[str, int],
+    idx_to_word: dict[int, str],
+) -> list[tuple[int, int]]:
+    entries: list[tuple[int, int]] = []
+    parts = [part.strip() for part in add_words.split(",") if part.strip()]
+    if len(parts) == 0:
+        return entries
+    for part in parts:
+        if "=" not in part:
+            raise ValueError(f"invalid add-words entry: {part!r}; expected word=label")
+        word_raw, label_raw = part.split("=", 1)
+        normalized = normalize_word(word_raw.strip())
+        if normalized not in lower_to_idx:
+            raise ValueError(f"word not in model vocabulary: {word_raw.strip()!r}")
+        word_idx = int(lower_to_idx[normalized])
+        label = parse_answer_char(label_raw.strip())
+        entries.append((word_idx, label))
+    # Deduplicate by word_idx with last assignment winning.
+    dedup: dict[int, int] = {}
+    for word_idx, label in entries:
+        dedup[word_idx] = label
+    out = sorted(dedup.items(), key=lambda item: idx_to_word[item[0]])
+    return out
+
+
+def collect_additional_entries_interactively(
+    lower_to_idx: dict[str, int],
+    idx_to_word: dict[int, str],
+) -> list[tuple[int, int]]:
+    print("Enter additional words to label as known/unknown. Empty word finishes input.")
+    print("Labels accepted: y/n, known/unknown, 1/0.")
+    entries: list[tuple[int, int]] = []
+    while True:
+        raw_word = input("word: ").strip()
+        if raw_word == "":
+            break
+        normalized = normalize_word(raw_word)
+        if normalized not in lower_to_idx:
+            print(f"Word {raw_word!r} is not in model vocabulary. Try another word.")
+            continue
+        word_idx = int(lower_to_idx[normalized])
+        canonical_word = idx_to_word[word_idx]
+        raw_label = input(f"label for {canonical_word} (known/unknown): ").strip()
+        try:
+            label = parse_answer_char(raw_label)
+        except ValueError as exc:
+            print(exc)
+            continue
+        entries.append((word_idx, label))
+    dedup: dict[int, int] = {}
+    for word_idx, label in entries:
+        dedup[word_idx] = label
+    out = sorted(dedup.items(), key=lambda item: idx_to_word[item[0]])
+    return out
+
+
+def apply_additional_entries(
+    observed_word_ids: np.ndarray,
+    observed_labels: np.ndarray,
+    extra_entries: list[tuple[int, int]],
+) -> tuple[np.ndarray, np.ndarray, int]:
+    if len(extra_entries) == 0:
+        return observed_word_ids, observed_labels, 0
+    pos_by_word: dict[int, int] = {int(word_idx): idx for idx, word_idx in enumerate(observed_word_ids.tolist())}
+    ids = observed_word_ids.astype(np.int32).copy()
+    labels = observed_labels.astype(np.int32).copy()
+    changed = 0
+    for word_idx, label in extra_entries:
+        existing_pos = pos_by_word.get(int(word_idx))
+        if existing_pos is None:
+            ids = np.concatenate([ids, np.array([word_idx], dtype=np.int32)])
+            labels = np.concatenate([labels, np.array([label], dtype=np.int32)])
+            pos_by_word[int(word_idx)] = len(ids) - 1
+            changed += 1
+            continue
+        if int(labels[existing_pos]) != int(label):
+            labels[existing_pos] = int(label)
+            changed += 1
+    return ids, labels, changed
 
 
 def save_profile(path: Path, profile_name: str, words: pd.DataFrame, query_word_idx: np.ndarray, labels: np.ndarray) -> None:
@@ -673,10 +891,12 @@ def main() -> None:
     data_fp = dataset_fingerprint(args.data_dir)
     words, word_index, lower_to_idx, idx_to_word = load_word_context(args.data_dir)
     path = profile_path(args.profile_dir, args.profile)
+    profile_changed = False
     if path.exists() and not args.retake_test:
         observed_word_ids, observed_labels, payload = load_profile(path, word_index)
         print(f"Loaded profile: {path} ({len(observed_labels)} answers, created_at={payload.get('created_at')})")
     else:
+        _words_full, _x_words, response_frame = load_full_model_context(args.data_dir)
         query_word_idx = build_query_words(response_frame, 100, args.seed)
         if len(query_word_idx) < 100:
             raise ValueError(f"query sequence produced only {len(query_word_idx)} words")
@@ -687,42 +907,43 @@ def main() -> None:
         observed_word_ids = query_word_idx.astype(np.int32)
         save_profile(path, args.profile, words, observed_word_ids, observed_labels)
         print(f"Saved profile: {path}")
+        profile_changed = True
 
-    profile_fp = profile_fingerprint(observed_word_ids, observed_labels)
-    prob_cache_path = probability_cache_path(args.cache_dir, args.model, data_fp, profile_fp)
-    probs_all_words: np.ndarray
-    if not args.disable_cache and prob_cache_path.exists():
-        cached_probs = np.load(prob_cache_path)
-        if cached_probs.shape == (len(words),):
-            print(f"Using model: {args.model} (cached probabilities)")
-            probs_all_words = cached_probs.astype(np.float32)
-            print(f"Loaded cached probabilities: {prob_cache_path}")
+    extra_entries: list[tuple[int, int]] = []
+    if args.add_words is not None:
+        extra_entries.extend(parse_additional_entries(args.add_words, lower_to_idx, idx_to_word))
+    if args.add_words_interactive:
+        extra_entries.extend(collect_additional_entries_interactively(lower_to_idx, idx_to_word))
+    if len(extra_entries) > 0:
+        observed_word_ids, observed_labels, changed_count = apply_additional_entries(
+            observed_word_ids=observed_word_ids,
+            observed_labels=observed_labels,
+            extra_entries=extra_entries,
+        )
+        if changed_count > 0:
+            save_profile(path, args.profile, words, observed_word_ids, observed_labels)
+            profile_changed = True
+            print(f"Updated profile with {changed_count} additional/updated labels: {path}")
         else:
-            words_full, x_words, response_frame = load_full_model_context(args.data_dir)
-            if len(words_full) != len(words):
-                raise ValueError("word table mismatch between lightweight and full context")
-            estimator = load_or_fit_estimator(
-                model_key=args.model,
-                seed=args.seed,
-                response_frame=response_frame,
-                x_words=x_words,
-                cache_dir=args.cache_dir,
-                data_fp=data_fp,
-                disable_cache=args.disable_cache,
-            )
-            print(f"Using model: {args.model} ({estimator.name})")
-            state = estimator.initialize_user_state()
-            state = estimator.update_user_state(state, observed_word_ids, observed_labels)
-            probs_all_words = load_or_compute_probabilities(
-                estimator=estimator,
-                state=state,
-                n_words=x_words.shape[0],
-                cache_dir=args.cache_dir,
-                model_key=args.model,
-                data_fp=data_fp,
-                profile_fp=profile_fp,
-                disable_cache=args.disable_cache,
-            )
+            print("Additional labels did not change the profile.")
+
+    if profile_changed and not args.disable_cache:
+        removed_count = invalidate_probability_caches(args.cache_dir, data_fp)
+        if removed_count > 0:
+            print(f"Invalidated {removed_count} stale probability cache file(s) for dataset fingerprint {data_fp}.")
+
+    n_words = len(words)
+    model_path = model_cache_path(args.cache_dir, args.model, data_fp)
+    if not args.disable_cache and model_path.exists():
+        estimator = load_or_fit_estimator(
+            model_key=args.model,
+            seed=args.seed,
+            response_frame=None,
+            x_words=None,
+            cache_dir=args.cache_dir,
+            data_fp=data_fp,
+            disable_cache=args.disable_cache,
+        )
     else:
         words_full, x_words, response_frame = load_full_model_context(args.data_dir)
         if len(words_full) != len(words):
@@ -736,19 +957,19 @@ def main() -> None:
             data_fp=data_fp,
             disable_cache=args.disable_cache,
         )
-        print(f"Using model: {args.model} ({estimator.name})")
-        state = estimator.initialize_user_state()
-        state = estimator.update_user_state(state, observed_word_ids, observed_labels)
-        probs_all_words = load_or_compute_probabilities(
-            estimator=estimator,
-            state=state,
-            n_words=x_words.shape[0],
-            cache_dir=args.cache_dir,
-            model_key=args.model,
-            data_fp=data_fp,
-            profile_fp=profile_fp,
-            disable_cache=args.disable_cache,
-        )
+        n_words = x_words.shape[0]
+    print(f"Using model: {args.model} ({estimator.name})")
+    state, probs_all_words = build_state_and_probabilities(
+        estimator=estimator,
+        observed_word_ids=observed_word_ids,
+        observed_labels=observed_labels,
+        n_words=n_words,
+        cache_dir=args.cache_dir,
+        model_key=args.model,
+        data_fp=data_fp,
+        profile_name=args.profile,
+        disable_cache=args.disable_cache,
+    )
 
     book_path = select_book(args.data_dir / "example_texts", args.book)
     analysis = analyze_book(
