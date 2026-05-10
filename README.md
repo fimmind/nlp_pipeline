@@ -196,3 +196,72 @@ Recreate:
 ```
 
 These files are not required for reproducing results and should not be committed.
+
+## Practical Book Vocabulary CLI
+
+The repository includes a practical script that asks the user to mark 100 words as known/unknown, infers word-level knowledge with the current best model, and analyzes books in `data/example_texts/`.
+
+Script:
+
+- `scripts/vocab_book_cli.py`
+
+### First Run (Interactive)
+
+```bash
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
+.venv/bin/python scripts/vocab_book_cli.py \
+  --profile your_name \
+  --book AiW.txt
+```
+
+What happens:
+
+1. The script prints the 100-word test list.
+2. You answer each item with `y/n` (or `known/unknown`, `1/0`).
+3. The profile is saved to `data/user_profiles/your_name.json`.
+4. The selected book is analyzed using the inferred vocabulary knowledge.
+
+### Reuse Saved Profile On Another Book
+
+```bash
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
+.venv/bin/python scripts/vocab_book_cli.py \
+  --profile your_name \
+  --book "The hitchhikers guide to the galaxy - Douglas Adams.txt"
+```
+
+If `--retake-test` is not provided, the saved profile is loaded and reused.
+
+### Retake The 100-Word Test
+
+```bash
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
+.venv/bin/python scripts/vocab_book_cli.py \
+  --profile your_name \
+  --retake-test \
+  --book "The Great Gatsby.txt"
+```
+
+### Non-Interactive / Automation Run
+
+Use `--answer-string` with exactly 100 characters from `y/n/1/0/k/u`:
+
+```bash
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
+.venv/bin/python scripts/vocab_book_cli.py \
+  --profile smoke_user \
+  --retake-test \
+  --answer-string "$(printf 'y%.0s' {1..100})" \
+  --book AiW.txt
+```
+
+### Book Estimate Output
+
+The script prints:
+
+1. `Book Vocabulary Estimate` with unknown-token count and percentage.
+2. 25 random in-book words expected known.
+3. 25 random in-book words expected unknown.
+4. Up to 10 sentences where exactly one in-vocabulary word is expected unknown.
+
+Out-of-model-vocabulary tokens are discarded from unknown-word computations.
