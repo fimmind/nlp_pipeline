@@ -205,12 +205,49 @@ Script:
 
 - `scripts/vocab_book_cli.py`
 
+### List Available Models
+
+```bash
+.venv/bin/python scripts/vocab_book_cli.py --list-models
+```
+
+The 100-word profile is model-agnostic and reusable across models. You can run the test once, then compare different models without retaking it.
+
+### Choose Model (`--model`)
+
+Use `--model <name>` to switch the estimator used for inference.
+
+Practical guidance:
+
+| Model | Type | Relative speed | Notes |
+|---|---|---|---|
+| `rasch` | non-neural | fastest | Good baseline for quick checks. |
+| `twopl` | non-neural | very fast | Slightly richer than Rasch. |
+| `vote` | non-neural | very fast | User-similarity vote model. |
+| `svd` | non-neural | fast | Strong collaborative latent model. |
+| `rasch_vote` | non-neural | fast | Lightweight hybrid. |
+| `user_logreg` | non-neural | medium | Fits per-user logistic model from observed answers. |
+| `fasttext_kernel` | non-neural | medium | Semantic kernel logistic model over embeddings. |
+| `best_high_budget` | non-neural ensemble | medium | Best fixed blend for larger observed budgets. |
+| `best_adaptive` | non-neural ensemble | medium | Current default/best practical model. |
+
+Example with a fast non-neural model:
+
+```bash
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
+.venv/bin/python scripts/vocab_book_cli.py \
+  --profile your_name \
+  --model rasch \
+  --book AiW.txt
+```
+
 ### First Run (Interactive)
 
 ```bash
 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
 .venv/bin/python scripts/vocab_book_cli.py \
   --profile your_name \
+  --model best_adaptive \
   --book AiW.txt
 ```
 
@@ -227,6 +264,7 @@ What happens:
 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
 .venv/bin/python scripts/vocab_book_cli.py \
   --profile your_name \
+  --model svd \
   --book "The hitchhikers guide to the galaxy - Douglas Adams.txt"
 ```
 
@@ -238,6 +276,7 @@ If `--retake-test` is not provided, the saved profile is loaded and reused.
 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
 .venv/bin/python scripts/vocab_book_cli.py \
   --profile your_name \
+  --model best_adaptive \
   --retake-test \
   --book "The Great Gatsby.txt"
 ```
@@ -250,6 +289,7 @@ Use `--answer-string` with exactly 100 characters from `y/n/1/0/k/u`:
 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
 .venv/bin/python scripts/vocab_book_cli.py \
   --profile smoke_user \
+  --model rasch \
   --retake-test \
   --answer-string "$(printf 'y%.0s' {1..100})" \
   --book AiW.txt

@@ -18,9 +18,11 @@ os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 from vocab_benchmark.data import load_all
 from vocab_benchmark.estimators.base import Estimator, UserState
 from vocab_benchmark.estimators.ensemble import BudgetAdaptiveEnsembleEstimator, WeightedAveragedEnsembleEstimator
+from vocab_benchmark.estimators.fasttext_kernel import FastTextKernelLogisticConfig, FastTextKernelLogisticEstimator
 from vocab_benchmark.estimators.irt import RaschIRTOnlineEstimator, TwoPLIRTOnlineEstimator
 from vocab_benchmark.estimators.observed_user_vote import ObservedMatchUserVoteEstimator
 from vocab_benchmark.estimators.online_user_logistic import OnlineUserLogisticEstimator
+from vocab_benchmark.estimators.svd import SVDRidgeUserEstimator
 from vocab_benchmark.features import build_response_frame, build_word_feature_matrix, build_word_index
 
 
@@ -28,6 +30,19 @@ WORD_RE = re.compile(r"[A-Za-z]+(?:['\u2019][A-Za-z]+)?")
 SENTENCE_RE = re.compile(r"[^.!?]+[.!?]+|[^.!?]+$")
 PROFILE_VERSION = 1
 MODEL_NAME = "budget_adaptive_refined_raw_switch500"
+DEFAULT_MODEL_KEY = "best_adaptive"
+MODEL_HELP: dict[str, str] = {
+    "best_adaptive": "Best current practical model. Budget-adaptive Rasch/TwoPL/Vote/UserLogReg ensemble.",
+    "best_high_budget": "Best high-budget fixed blend. Strong at large query budgets.",
+    "rasch": "Fastest non-neural baseline: one-parameter IRT.",
+    "twopl": "Fast non-neural baseline: two-parameter IRT.",
+    "vote": "Fast nearest-user voting baseline.",
+    "user_logreg": "Per-user logistic regression on rich word features.",
+    "rasch_vote": "Fast hybrid: Rasch + vote.",
+    "rasch_twopl_vote_user": "Non-neural four-way blend: Rasch + TwoPL + vote + user logreg.",
+    "svd": "Fast latent collaborative non-neural model.",
+    "fasttext_kernel": "Non-neural semantic kernel logistic model over fastText features.",
+}
 
 
 @dataclass(frozen=True)
@@ -55,12 +70,14 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Estimate book vocabulary difficulty from a 100-word user profile.")
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     parser.add_argument("--book", type=str, default=None, help="File name or path under data/example_texts.")
-    parser.add_argument("--profile", type=str, required=True, help="Profile/user name used for saving and reusing answers.")
+    parser.add_argument("--profile", type=str, default=None, help="Profile/user name used for saving and reusing answers.")
     parser.add_argument("--profile-dir", type=Path, default=Path("data/user_profiles"))
     parser.add_argument("--retake-test", action="store_true", help="Ignore an existing profile and ask the 100 questions again.")
     parser.add_argument("--answer-string", type=str, default=None, help="Automation helper: 100 chars from y/n/1/0/k/u.")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--known-threshold", type=float, default=0.5)
+    parser.add_argument("--model", type=str, default=DEFAULT_MODEL_KEY, choices=sorted(MODEL_HELP.keys()))
+    parser.add_argument("--list-models", action="store_true", help="Print available models and exit.")
     return parser.parse_args()
 
 
@@ -119,6 +136,107 @@ def build_best_estimator() -> BudgetAdaptiveEnsembleEstimator:
         switch_observations=500,
         name=MODEL_NAME,
     )
+
+
+def build_estimator(model_key: str, seed: int) -> Estimator:
+    if model_key == "best_adaptive":
+        return build_best_estimator()
+    if model_key == "best_high_budget":
+        rasch = RaschIRTOnlineEstimator(prior_var=25.0, lr=1.0, n_fit_steps=20)
+        rasch.name = "rasch_highbudget_var25"
+        twopl = TwoPLIRTOnlineEstimator(prior_var=25.0, lr=1.0, n_fit_steps=20)
+        twopl.name = "twopl_highbudget_var25"
+        vote = ObservedMatchUserVoteEstimator(temperature=0.10, prior_blend=0.0, power=1.0)
+        vote.name = "observed_match_user_vote_t10"
+        user_logreg = OnlineUserLogisticEstimator(
+            regularization_c=0.1,
+            prior_blend=0.5,
+            class_weight_balanced=False,
+            min_observations=50,
+        )
+        user_logreg.name = "online_user_logreg_c01_pb50"
+        return WeightedAveragedEnsembleEstimator(
+            members=[rasch, twopl, vote, user_logreg],
+            weights=[0.29, 0.50, 0.13, 0.08],
+            name="refined_q1000_raw_w290_500_130_080_bias_p015",
+            logit_bias=0.015,
+        )
+    if model_key == "rasch":
+        estimator = RaschIRTOnlineEstimator(prior_var=25.0, lr=1.0, n_fit_steps=20)
+        estimator.name = "rasch_highbudget_var25"
+        return estimator
+    if model_key == "twopl":
+        estimator = TwoPLIRTOnlineEstimator(prior_var=25.0, lr=1.0, n_fit_steps=20)
+        estimator.name = "twopl_highbudget_var25"
+        return estimator
+    if model_key == "vote":
+        estimator = ObservedMatchUserVoteEstimator(temperature=0.10, prior_blend=0.0, power=1.0)
+        estimator.name = "observed_match_user_vote_t10"
+        return estimator
+    if model_key == "user_logreg":
+        estimator = OnlineUserLogisticEstimator(
+            regularization_c=0.1,
+            prior_blend=0.5,
+            class_weight_balanced=False,
+            min_observations=50,
+        )
+        estimator.name = "online_user_logreg_c01_pb50"
+        return estimator
+    if model_key == "rasch_vote":
+        rasch = RaschIRTOnlineEstimator(prior_var=25.0, lr=1.0, n_fit_steps=20)
+        rasch.name = "rasch_highbudget_var25"
+        vote = ObservedMatchUserVoteEstimator(temperature=0.10, prior_blend=0.0, power=1.0)
+        vote.name = "observed_match_user_vote_t10"
+        return WeightedAveragedEnsembleEstimator(
+            members=[rasch, vote],
+            weights=[0.80, 0.20],
+            name="rasch_vote_hybrid_w80_20",
+            logit_bias=0.0,
+        )
+    if model_key == "rasch_twopl_vote_user":
+        rasch = RaschIRTOnlineEstimator(prior_var=25.0, lr=1.0, n_fit_steps=20)
+        rasch.name = "rasch_highbudget_var25"
+        twopl = TwoPLIRTOnlineEstimator(prior_var=25.0, lr=1.0, n_fit_steps=20)
+        twopl.name = "twopl_highbudget_var25"
+        vote = ObservedMatchUserVoteEstimator(temperature=0.10, prior_blend=0.0, power=1.0)
+        vote.name = "observed_match_user_vote_t10"
+        user_logreg = OnlineUserLogisticEstimator(
+            regularization_c=0.1,
+            prior_blend=0.5,
+            class_weight_balanced=False,
+            min_observations=50,
+        )
+        user_logreg.name = "online_user_logreg_c01_pb50"
+        return WeightedAveragedEnsembleEstimator(
+            members=[rasch, twopl, vote, user_logreg],
+            weights=[0.35, 0.45, 0.15, 0.05],
+            name="rasch_twopl_vote_user_w35_45_15_05",
+            logit_bias=0.0,
+        )
+    if model_key == "svd":
+        estimator = SVDRidgeUserEstimator(rank=5, ridge=1.0, residual_scale=0.5, intercept_ridge=1.0)
+        estimator.name = "svd_ridge_r5_l1_s05"
+        return estimator
+    if model_key == "fasttext_kernel":
+        return FastTextKernelLogisticEstimator(
+            FastTextKernelLogisticConfig(
+                embedding_dim=300,
+                temperature=0.15,
+                episodes_per_user=12,
+                target_samples_per_episode=256,
+                seed=seed,
+                regularization_c=1.0,
+                dynamic_centering_weight=1.0,
+                user_rate_centering_weight=0.35,
+            )
+        )
+    raise ValueError(f"unknown model={model_key}")
+
+
+def print_model_catalog() -> None:
+    print("Available models:")
+    for key in sorted(MODEL_HELP.keys()):
+        print(f"  {key:<24} {MODEL_HELP[key]}")
 
 
 def load_model_context(data_dir: Path) -> tuple[pd.DataFrame, np.ndarray, pd.DataFrame, dict[str, int], dict[str, int], dict[str, int]]:
@@ -229,7 +347,7 @@ def save_profile(path: Path, profile_name: str, words: pd.DataFrame, query_word_
         "version": PROFILE_VERSION,
         "profile": profile_name,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "model": MODEL_NAME,
+        "model": "profile_model_agnostic",
         "feature_set": "rich",
         "query_count": int(len(entries)),
         "answers": entries,
@@ -432,6 +550,11 @@ def print_word_rows(rows: list[tuple[str, float, int]]) -> None:
 
 def main() -> None:
     args = parse_args()
+    if args.list_models:
+        print_model_catalog()
+        return
+    if args.profile is None or args.profile.strip() == "":
+        raise ValueError("--profile is required unless --list-models is used")
     if args.known_threshold <= 0.0 or args.known_threshold >= 1.0:
         raise ValueError("known-threshold must be between 0 and 1")
 
@@ -453,7 +576,8 @@ def main() -> None:
         save_profile(path, args.profile, words, observed_word_ids, observed_labels)
         print(f"Saved profile: {path}")
 
-    estimator = build_best_estimator()
+    estimator = build_estimator(args.model, args.seed)
+    print(f"Using model: {args.model} ({estimator.name})")
     estimator.fit(response_frame, x_words)
     state = estimator.initialize_user_state()
     state = estimator.update_user_state(state, observed_word_ids, observed_labels)
