@@ -43,6 +43,18 @@ MODEL_HELP: dict[str, str] = {
     "svd": "Fast latent collaborative non-neural model.",
     "fasttext_kernel": "Non-neural semantic kernel logistic model over fastText features.",
 }
+MODEL_ESTIMATED_PRECISION: dict[str, float] = {
+    "best_adaptive": 0.842,
+    "best_high_budget": 0.842,
+    "rasch": 0.840,
+    "twopl": 0.839,
+    "vote": 0.833,
+    "user_logreg": 0.751,
+    "rasch_vote": 0.840,
+    "rasch_twopl_vote_user": 0.841,
+    "svd": 0.809,
+    "fasttext_kernel": 0.796,
+}
 
 
 @dataclass(frozen=True)
@@ -235,8 +247,11 @@ def build_estimator(model_key: str, seed: int) -> Estimator:
 
 def print_model_catalog() -> None:
     print("Available models:")
+    print("  (est_precision is an empirical accuracy@1000 proxy from recent benchmarks)")
     for key in sorted(MODEL_HELP.keys()):
-        print(f"  {key:<24} {MODEL_HELP[key]}")
+        est = MODEL_ESTIMATED_PRECISION.get(key)
+        est_text = f"{est:.3f}" if est is not None else "n/a"
+        print(f"  {key:<24} est_precision={est_text}  {MODEL_HELP[key]}")
 
 
 def load_model_context(data_dir: Path) -> tuple[pd.DataFrame, np.ndarray, pd.DataFrame, dict[str, int], dict[str, int], dict[str, int]]:
