@@ -338,6 +338,10 @@ For each queried word the script prints:
 3. when `--book` is provided: sentences containing the queried word, sorted by predicted unknown-word count (least to most).  
 Alongside each sentence it prints unknown words in that sentence and their model predictions.
 
+When `--query-words` is provided, the script suppresses the general book-analysis sections:
+`Book Vocabulary Estimate`, random expected known/unknown word lists, and
+`Sentences Expected To Have Exactly One Unknown Word`.
+
 ### Book Estimate Output
 
 The script prints:

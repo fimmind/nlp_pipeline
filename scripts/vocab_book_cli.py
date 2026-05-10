@@ -1084,19 +1084,21 @@ def main() -> None:
         disable_cache=args.disable_cache,
     )
 
+    query_words = parse_query_words(args.query_words) if args.query_words is not None else []
+
     book_path: Path | None = None
     if args.book is not None:
         book_path = select_book(args.data_dir / "example_texts", args.book)
-        analysis = analyze_book(
-            path=book_path,
-            lower_to_idx=lower_to_idx,
-            idx_to_word=idx_to_word,
-            probs_all_words=probs_all_words,
-            threshold=args.known_threshold,
-            seed=args.seed,
-        )
-        print_analysis(analysis)
-    query_words = parse_query_words(args.query_words) if args.query_words is not None else []
+        if len(query_words) == 0:
+            analysis = analyze_book(
+                path=book_path,
+                lower_to_idx=lower_to_idx,
+                idx_to_word=idx_to_word,
+                probs_all_words=probs_all_words,
+                threshold=args.known_threshold,
+                seed=args.seed,
+            )
+            print_analysis(analysis)
     if len(query_words) > 0:
         print_query_word_report(
             query_words=query_words,
