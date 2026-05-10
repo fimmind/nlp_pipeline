@@ -164,6 +164,27 @@ p_i <- clip(p_i, 1e-6, 1 - 1e-6)
 
 ## Component 2: Rasch IRT Online Estimator
 
+### Generative Specification
+
+For each user-word pair `(u, i)` in the Rasch model:
+
+```text
+Y_{u,i} | theta_u, b_i ~ Bernoulli(pi_{u,i})
+pi_{u,i} = sigma(theta_u - b_i)
+```
+
+where:
+
+```text
+sigma(z) = 1 / (1 + exp(-z))
+```
+
+The user ability prior used by the online estimator is:
+
+```text
+theta_u ~ Normal(0, tau^2),  tau^2 = 25
+```
+
 ### Fitted Item Difficulty
 
 For each word `i`, compute the train-user empirical known rate:
@@ -183,21 +204,46 @@ Low `b_i` means an easy/common known word; high `b_i` means a hard/rare known wo
 
 ### Online User Ability
 
-The held-out user has scalar ability `theta`. With prior variance `tau^2 = 25`, `theta` is fit by MAP estimation from all observed labels in `O_q`:
+For the held-out user `u*`, define observed pairs:
 
 ```text
-L_Rasch(theta) = sum_{(i,y) in O_q} [y * log sigma(theta - b_i)
-                                  + (1 - y) * log(1 - sigma(theta - b_i))]
-                 - theta^2 / (2 * tau^2)
+O_q = {(i_t, y_t)}_{t=1}^q,  y_t in {0,1}
 ```
 
-The implementation performs Newton updates for 20 steps with learning rate `1.0`:
+With prior variance `tau^2 = 25`, ability `theta` is estimated by MAP from all observations in `O_q`.
+
+Likelihood:
 
 ```text
-p_i = sigma(theta - b_i)
-g   = sum_{(i,y) in O_q}(y - p_i) - theta / tau^2
-h   = -sum_{(i,y) in O_q} p_i * (1 - p_i) - 1 / tau^2
-theta <- theta - g / h
+P({y_t}_{t=1}^q | theta, {b_{i_t}}) = product_{t=1}^q sigma(theta - b_{i_t})^{y_t} * (1 - sigma(theta - b_{i_t}))^{1-y_t}
+```
+
+Log-posterior objective (up to additive constant):
+
+```text
+ell(theta) = sum_{t=1}^q [y_t * log sigma(theta - b_{i_t}) + (1 - y_t) * log(1 - sigma(theta - b_{i_t}))]
+             - theta^2 / (2 * tau^2)
+```
+
+Define:
+
+```text
+p_t(theta) = sigma(theta - b_{i_t})
+```
+
+Then:
+
+```text
+g(theta) = d ell / d theta = sum_{t=1}^q (y_t - p_t(theta)) - theta / tau^2
+h(theta) = d^2 ell / d theta^2 = -sum_{t=1}^q p_t(theta) * (1 - p_t(theta)) - 1 / tau^2
+```
+
+Since `h(theta) < 0` for all `theta`, `ell(theta)` is strictly concave and has a unique maximizer.
+
+The implementation performs Newton updates for 20 steps with learning-rate factor `eta = 1.0`:
+
+```text
+theta <- theta - eta * g(theta) / h(theta)
 ```
 
 The state stores cumulative observations:
@@ -209,7 +255,7 @@ state = {theta, var, observed_word_ids, observed_labels}
 The posterior variance proxy is:
 
 ```text
-var = max(1e-6, -1 / h)
+var = max(1e-6, -1 / h(theta_hat))
 ```
 
 ### Prediction
