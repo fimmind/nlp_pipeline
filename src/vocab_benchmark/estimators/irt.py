@@ -130,3 +130,77 @@ class TwoPLIRTOnlineEstimator(Estimator):
     def predict_uncertainty(self, user_state: UserState, candidate_word_ids: np.ndarray) -> np.ndarray:
         p = self.predict_proba(user_state, candidate_word_ids)
         return p * (1 - p) + user_state.payload["var"] * 0.05
+
+
+class BasicRaschFromAccuracyEstimator(Estimator):
+    name = "basic_rasch_from_accuracy"
+
+    def __init__(self, prior_var: float, lr: float, n_fit_steps: int, accuracy_values: np.ndarray | None = None) -> None:
+        self.prior_var = prior_var
+        self.lr = lr
+        self.n_fit_steps = n_fit_steps
+        self._accuracy_values = accuracy_values
+        self.b = np.array([], dtype=np.float32)
+
+    def _load_accuracy_values(self, n_words: int) -> np.ndarray:
+        if self._accuracy_values is not None:
+            values = np.asarray(self._accuracy_values, dtype=np.float32).reshape(-1)
+            if len(values) != n_words:
+                raise ValueError(f"accuracy_values length mismatch: expected {n_words}, got {len(values)}")
+            return values
+        freq = pd.read_csv("data/processed/frequency.csv")
+        if "accuracy" not in freq.columns:
+            raise ValueError("required column missing: data/processed/frequency.csv::accuracy")
+        values = pd.to_numeric(freq["accuracy"], errors="coerce").to_numpy(dtype=np.float32)
+        if len(values) < n_words:
+            raise ValueError(
+                f"insufficient accuracy rows in data/processed/frequency.csv: need {n_words}, got {len(values)}"
+            )
+        return values[:n_words]
+
+    def fit(self, train_responses: pd.DataFrame, word_features: np.ndarray) -> None:
+        del train_responses
+        n_words = word_features.shape[0]
+        raw_accuracy = self._load_accuracy_values(n_words)
+        accuracy = np.where(raw_accuracy > 1.0, raw_accuracy / 100.0, raw_accuracy)
+        accuracy = np.where(np.isnan(accuracy), 0.5, accuracy).astype(np.float32)
+        p = np.clip(accuracy, 1e-4, 1.0 - 1e-4)
+        self.b = -np.log(p / (1.0 - p)).astype(np.float32)
+
+    def initialize_user_state(self, optional_user_metadata: dict | None = None) -> UserState:
+        del optional_user_metadata
+        return UserState(
+            payload={
+                "theta": 0.0,
+                "var": self.prior_var,
+                "observed_word_ids": np.zeros(0, dtype=np.int32),
+                "observed_labels": np.zeros(0, dtype=np.float32),
+            }
+        )
+
+    def update_user_state(self, user_state: UserState, observed_word_ids: np.ndarray, observed_labels: np.ndarray) -> UserState:
+        theta = float(user_state.payload["theta"])
+        prev_ids = np.asarray(user_state.payload.get("observed_word_ids", np.zeros(0, dtype=np.int32)), dtype=np.int32)
+        prev_labels = np.asarray(user_state.payload.get("observed_labels", np.zeros(0, dtype=np.float32)), dtype=np.float32)
+        all_ids = np.concatenate([prev_ids, observed_word_ids.astype(np.int32)])
+        all_labels = np.concatenate([prev_labels, observed_labels.astype(np.float32)])
+        for _ in range(self.n_fit_steps):
+            logits = theta - self.b[all_ids]
+            p = expit(logits)
+            grad = np.sum(all_labels - p) - theta / self.prior_var
+            h = -np.sum(p * (1.0 - p)) - 1.0 / self.prior_var
+            if abs(h) < 1e-8:
+                break
+            theta = theta - self.lr * grad / h
+        logits = theta - self.b[all_ids]
+        p = expit(logits)
+        h = -np.sum(p * (1.0 - p)) - 1.0 / self.prior_var
+        var = float(max(1e-6, -1.0 / h))
+        return UserState(payload={"theta": theta, "var": var, "observed_word_ids": all_ids, "observed_labels": all_labels})
+
+    def predict_proba(self, user_state: UserState, candidate_word_ids: np.ndarray) -> np.ndarray:
+        return np.clip(expit(user_state.payload["theta"] - self.b[candidate_word_ids]), 1e-6, 1.0 - 1e-6)
+
+    def predict_uncertainty(self, user_state: UserState, candidate_word_ids: np.ndarray) -> np.ndarray:
+        p = self.predict_proba(user_state, candidate_word_ids)
+        return p * (1.0 - p) + user_state.payload["var"] * 0.05

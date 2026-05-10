@@ -530,3 +530,76 @@ The latest improvement over the previous best raw `accuracy@1000=0.840741` is re
 6. Avoid broad neural retraining until the data ceiling is clearer. Prior neural variants were slower and did not beat the practical IRT/vote/logistic ensembles.
 
 Validation status: `13 passed in 7.87s`.
+
+## Recent Update: Basic Rasch From Workbook Accuracy (No Embeddings)
+
+Implemented a new estimator:
+
+```text
+BasicRaschFromAccuracyEstimator
+```
+
+Source code:
+
+- `src/vocab_benchmark/estimators/irt.py`
+- exported in `src/vocab_benchmark/estimators/__init__.py`
+
+### Purpose
+
+Create a Rasch-style model with fixed item difficulty taken directly from the workbook `accuracy` field (percentage of learners who know the word), with no response-based item pretraining.
+
+### Difficulty Construction
+
+For each word `i`, let `a_i` be the `accuracy` value from processed frequency data (derived from the Excel workbook `Words` tab column `accuracy`):
+
+```text
+p_i = clip(a_i, 1e-4, 1 - 1e-4)          # auto-converts 0..100 to 0..1 when needed
+b_i = -logit(p_i)
+```
+
+User ability `theta` is then updated online from observed user answers using the standard Rasch MAP Newton steps (same update form as other online Rasch variants).
+
+### Embedding Independence
+
+This estimator does not use fastText or any other embedding values for prediction logic.
+
+- It only uses:
+  - fixed `accuracy`-derived item difficulties,
+  - observed user labels for online `theta` updates.
+- `word_features` are only used for shape compatibility (`n_words`) with the common estimator interface.
+
+This provides a broader and more robust applicability path when semantic embeddings are unavailable or undesirable.
+
+### 16-User LOOU Evaluation
+
+Protocol:
+
+- dataset: static 16-user split
+- split: leave-one-user-out over all 16 users
+- query sequence: fixed `user_discriminative`
+- budgets: `q in {100, 1000, 2000}`
+
+Measured results:
+
+| estimator | q | accuracy | balanced_accuracy | average_precision_known | average_precision_unknown | runtime_seconds |
+|---|---:|---:|---:|---:|---:|---:|
+| basic_rasch_from_accuracy | 100 | 0.801457 | 0.736445 | 0.845434 | 0.773044 | 0.872759 |
+| basic_rasch_from_accuracy | 1000 | 0.814046 | 0.724037 | 0.857833 | 0.789470 | 1.739908 |
+| basic_rasch_from_accuracy | 2000 | 0.816395 | 0.711501 | 0.870307 | 0.803532 | 2.622707 |
+
+Artifacts:
+
+- `reports/time_est/basic_rasch_accuracy16_raw.csv`
+- `reports/time_est/basic_rasch_accuracy16_summary.csv`
+
+## Recent Benchmark Progress: Budget And Time Reports
+
+Added practical benchmark summaries and raw outputs:
+
+- `budget_size_est.md` with raw-accuracy comparison at budgets `10,20,30,40,50,100`
+- `time_est.md` with adaptation-time and accuracy at budgets `100,1000,2000`
+- corresponding CSV artifacts under:
+  - `reports/budget_size_est/`
+  - `reports/time_est/`
+
+These reports use incremental state progression across budgets (state updates are cumulative, not rebuilt from scratch).
