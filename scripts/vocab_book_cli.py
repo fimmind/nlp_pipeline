@@ -77,6 +77,7 @@ class BookAnalysis:
     expected_unknown_type_count: int
     known_words: list[tuple[str, float, int]]
     unknown_words: list[tuple[str, float, int]]
+    oov_words: list[tuple[str, int]]
     one_unknown_sentences: list[tuple[str, str, float]]
 
 
@@ -786,10 +787,12 @@ def analyze_book(
     token_counts: dict[str, int] = {}
     word_to_idx: dict[str, int] = {}
     oov_token_count = 0
+    oov_type_counts: dict[str, int] = {}
     for token in tokens:
         token_counts[token.normalized] = token_counts.get(token.normalized, 0) + 1
         if token.word_idx is None:
             oov_token_count += 1
+            oov_type_counts[token.normalized] = oov_type_counts.get(token.normalized, 0) + 1
         elif token.normalized not in word_to_idx:
             word_to_idx[token.normalized] = int(token.word_idx)
     unique_indices = np.array(sorted(set(word_to_idx.values())), dtype=np.int32)
@@ -812,6 +815,7 @@ def analyze_book(
     rng = np.random.default_rng(seed)
     sampled_known = sample_rows(known_rows, 25, rng)
     sampled_unknown = sample_rows(unknown_rows, 25, rng)
+    sampled_oov = sample_oov_rows(oov_type_counts, 25, rng)
     sentence_rows = find_one_unknown_sentences(text, lower_to_idx, idx_to_word, probabilities, threshold, seed)
     return BookAnalysis(
         path=path,
@@ -823,6 +827,7 @@ def analyze_book(
         expected_unknown_type_count=len(expected_unknown_types),
         known_words=sampled_known,
         unknown_words=sampled_unknown,
+        oov_words=sampled_oov,
         one_unknown_sentences=sentence_rows,
     )
 
@@ -833,6 +838,14 @@ def sample_rows(rows: list[tuple[str, float, int]], sample_size: int, rng: np.ra
         return sorted_rows
     selected = rng.choice(np.arange(len(sorted_rows)), size=sample_size, replace=False)
     return [sorted_rows[int(idx)] for idx in np.sort(selected).tolist()]
+
+
+def sample_oov_rows(oov_type_counts: dict[str, int], sample_size: int, rng: np.random.Generator) -> list[tuple[str, int]]:
+    rows = sorted(oov_type_counts.items(), key=lambda item: item[0])
+    if len(rows) <= sample_size:
+        return rows
+    selected = rng.choice(np.arange(len(rows)), size=sample_size, replace=False)
+    return [rows[int(idx)] for idx in np.sort(selected).tolist()]
 
 
 def find_one_unknown_sentences(
@@ -884,6 +897,8 @@ def print_analysis(analysis: BookAnalysis) -> None:
     print_word_rows(analysis.known_words)
     print("\n=== Random 25 Words Expected Unknown ===")
     print_word_rows(analysis.unknown_words)
+    print("\n=== Random 25 Out-of-Model-Vocabulary Tokens ===")
+    print_oov_rows(analysis.oov_words)
 
     print("\n=== Sentences Expected To Have Exactly One Unknown Word ===")
     if len(analysis.one_unknown_sentences) == 0:
@@ -898,6 +913,14 @@ def print_word_rows(rows: list[tuple[str, float, int]]) -> None:
         return
     for word, probability, count in rows:
         print(f"  {word:<24} p_known={probability:.3f}  count={count}")
+
+
+def print_oov_rows(rows: list[tuple[str, int]]) -> None:
+    if len(rows) == 0:
+        print("No out-of-model-vocabulary tokens found.")
+        return
+    for word, count in rows:
+        print(f"  {word:<24} count={count}")
 
 
 def build_last_observed_map(observed_word_ids: np.ndarray, observed_labels: np.ndarray) -> dict[int, tuple[int, int]]:
