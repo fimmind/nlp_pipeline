@@ -88,6 +88,100 @@ class SentenceQueryMatch:
     known_token_count: int
 
 
+def infer_pos_hint(prev_token: str | None, next_token: str | None) -> str:
+    determiners = {"a", "an", "the", "this", "that", "these", "those", "my", "your", "our", "his", "her", "their"}
+    to_markers = {"to"}
+    be_forms = {"am", "is", "are", "was", "were", "be", "been", "being"}
+    pronouns = {"i", "you", "he", "she", "we", "they", "it"}
+    auxiliaries = {"do", "does", "did", "can", "could", "will", "would", "shall", "should", "may", "might", "must"}
+
+    if prev_token in to_markers:
+        return "verb"
+    if prev_token in be_forms:
+        return "verb_participle"
+    if prev_token in determiners:
+        return "noun"
+    if prev_token in pronouns or prev_token in auxiliaries:
+        return "verb"
+    if next_token in {"of", "and", "or"}:
+        return "noun"
+    return "any"
+
+
+def deinflection_candidates(token: str) -> list[tuple[str, str]]:
+    candidates: list[tuple[str, str]] = [(token, "identity")]
+    if len(token) <= 2:
+        return candidates
+
+    def add(candidate: str, tag: str) -> None:
+        if len(candidate) >= 2 and all(ch.isalpha() or ch == "'" for ch in candidate):
+            candidates.append((candidate, tag))
+
+    if token.endswith("ies") and len(token) > 4:
+        add(token[:-3] + "y", "noun_plural")
+    if token.endswith("es") and len(token) > 3:
+        add(token[:-2], "noun_plural")
+    if token.endswith("s") and len(token) > 3 and not token.endswith("ss"):
+        add(token[:-1], "noun_plural")
+
+    if token.endswith("ied") and len(token) > 4:
+        add(token[:-3] + "y", "verb_past")
+    if token.endswith("ed") and len(token) > 3:
+        add(token[:-2], "verb_past")
+        add(token[:-1], "verb_past")
+
+    if token.endswith("ing") and len(token) > 5:
+        add(token[:-3], "verb_ing")
+        add(token[:-3] + "e", "verb_ing")
+
+    if token.endswith("er") and len(token) > 4:
+        add(token[:-2], "adj_comp")
+    if token.endswith("est") and len(token) > 5:
+        add(token[:-3], "adj_super")
+    return candidates
+
+
+def pick_contextual_lemma(
+    token: str,
+    prev_token: str | None,
+    next_token: str | None,
+    lower_to_idx: dict[str, int],
+) -> str:
+    candidates = deinflection_candidates(token)
+    hint = infer_pos_hint(prev_token, next_token)
+    best = token
+    best_score = -10_000.0
+    for candidate, tag in candidates:
+        score = 0.0
+        if candidate in lower_to_idx:
+            score += 100.0
+        if tag == "identity":
+            score += 5.0
+        if hint == "noun" and tag.startswith("noun_"):
+            score += 4.0
+        if hint == "verb" and tag.startswith("verb_"):
+            score += 4.0
+        if hint == "verb_participle" and tag == "verb_ing":
+            score += 4.0
+        if hint == "any":
+            score += 1.0
+        score -= 0.1 * abs(len(candidate) - len(token))
+        if score > best_score:
+            best = candidate
+            best_score = score
+    return best
+
+
+def contextual_deinflect_tokens(raw_tokens: list[str], lower_to_idx: dict[str, int]) -> list[str]:
+    normalized = [normalize_word(token) for token in raw_tokens]
+    out: list[str] = []
+    for idx, token in enumerate(normalized):
+        prev_token = normalized[idx - 1] if idx > 0 else None
+        next_token = normalized[idx + 1] if idx + 1 < len(normalized) else None
+        out.append(pick_contextual_lemma(token, prev_token, next_token, lower_to_idx))
+    return out
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Estimate book vocabulary difficulty from a 100-word user profile.")
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
@@ -661,8 +755,14 @@ def deduplicate_entries_preserving_input_order(entries: list[tuple[int, int]]) -
     return [(word_idx, label_by_word[word_idx]) for word_idx, _ in ordered_words]
 
 
-def parse_query_words(query_words: str) -> list[str]:
-    return [normalize_word(part) for part in query_words.split(",") if normalize_word(part) != ""]
+def parse_query_words(query_words: str, lower_to_idx: dict[str, int]) -> list[str]:
+    out: list[str] = []
+    for part in query_words.split(","):
+        normalized = normalize_word(part)
+        if normalized == "":
+            continue
+        out.append(pick_contextual_lemma(normalized, None, None, lower_to_idx))
+    return out
 
 
 def apply_additional_entries(
@@ -755,10 +855,10 @@ def select_book(example_dir: Path, requested: str | None) -> Path:
 
 
 def tokenize_book(text: str, lower_to_idx: dict[str, int]) -> list[BookToken]:
+    raw_tokens = [match.group(0) for match in WORD_RE.finditer(text)]
+    normalized_tokens = contextual_deinflect_tokens(raw_tokens, lower_to_idx)
     tokens: list[BookToken] = []
-    for match in WORD_RE.finditer(text):
-        raw = match.group(0)
-        normalized = normalize_word(raw)
+    for raw, normalized in zip(raw_tokens, normalized_tokens):
         tokens.append(BookToken(raw=raw, normalized=normalized, word_idx=lower_to_idx.get(normalized)))
     return tokens
 
@@ -859,12 +959,12 @@ def find_one_unknown_sentences(
     candidates: list[tuple[str, str, float]] = []
     for sentence in split_sentences(text):
         raw_tokens = [match.group(0) for match in WORD_RE.finditer(sentence)]
+        normalized_tokens = contextual_deinflect_tokens(raw_tokens, lower_to_idx)
         if len(raw_tokens) < 4 or len(raw_tokens) > 35:
             continue
         unknown_words: list[tuple[str, float]] = []
         has_oov = False
-        for raw in raw_tokens:
-            normalized = normalize_word(raw)
+        for normalized in normalized_tokens:
             word_idx = lower_to_idx.get(normalized)
             if word_idx is None or int(word_idx) not in probabilities:
                 has_oov = True
@@ -940,7 +1040,7 @@ def find_query_word_sentences(
     rows: list[SentenceQueryMatch] = []
     for sentence in split_sentences(book_text):
         raw_tokens = [match.group(0) for match in WORD_RE.finditer(sentence)]
-        normalized_tokens = [normalize_word(token) for token in raw_tokens]
+        normalized_tokens = contextual_deinflect_tokens(raw_tokens, lower_to_idx)
         if query_word not in normalized_tokens:
             continue
         unknown_items: list[tuple[str, float]] = []
@@ -1107,7 +1207,7 @@ def main() -> None:
         disable_cache=args.disable_cache,
     )
 
-    query_words = parse_query_words(args.query_words) if args.query_words is not None else []
+    query_words = parse_query_words(args.query_words, lower_to_idx) if args.query_words is not None else []
 
     book_path: Path | None = None
     if args.book is not None:
