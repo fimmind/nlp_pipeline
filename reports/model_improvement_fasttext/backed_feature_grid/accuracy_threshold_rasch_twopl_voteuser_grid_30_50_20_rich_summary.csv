@@ -1,0 +1,3 @@
+model,q,accuracy,balanced_accuracy,nll,brier,auroc,runtime_seconds,users
+neural_memory_mirt_accuracy_threshold_rasch_twopl_voteuser_grid_30_50_20_user_discriminative_rich,100,0.7776487770026057,0.7965673185567287,0.48161523257784733,0.15419888030737633,0.8848668269163388,0.46188807375051505,16
+neural_memory_mirt_accuracy_threshold_rasch_twopl_voteuser_grid_30_50_20_user_discriminative_rich,1000,0.817205828862417,0.8076526264512546,0.41743159506755584,0.12910891324281687,0.9005567258825141,0.9572396645630761,16

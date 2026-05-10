@@ -1,0 +1,46 @@
+# Local environments and dependency installs
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# Python runtime and build artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local Codex/session mounts
+.agents/
+.codex/
+.git-store/
+
+# External fastText artifacts
+cc.*.bin
+cc.*.bin.gz
+data/raw/wiki-news-300d-1M.vec
+data/raw/wiki-news-300d-1M.vec.zip
+
+# Externally hosted large raw datasets
+data/raw/duolingo_hlr/learning_traces.csv
+data/raw/duolingo_hlr/learning_traces.csv.gz
+
+# Generated normalized data products
+data/processed/
+data/splits/
+data/DATASET_CARD.json

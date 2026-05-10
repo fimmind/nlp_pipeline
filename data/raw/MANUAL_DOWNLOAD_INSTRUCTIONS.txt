@@ -1,0 +1,5 @@
+Manual dataset download notes
+
+Ehara ESL: save static CSV to data/raw/ehara_esl_vocab/responses_raw.csv
+EVKD1: save static CSV to data/raw/evkd1/responses_raw.csv
+Duolingo HLR: save traces CSV(.gz) to data/raw/duolingo_hlr/learning_traces.csv.gz
