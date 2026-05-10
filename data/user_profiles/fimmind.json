@@ -1,0 +1,510 @@
+{
+  "answers": [
+    {
+      "label": 1,
+      "word": "reproductive",
+      "word_id": "w_18a551737a895255"
+    },
+    {
+      "label": 1,
+      "word": "deploy",
+      "word_id": "w_b0d51b9ff91b623c"
+    },
+    {
+      "label": 1,
+      "word": "octave",
+      "word_id": "w_eeb9f88010d29f06"
+    },
+    {
+      "label": 1,
+      "word": "headteacher",
+      "word_id": "w_43cecd8e788df3ec"
+    },
+    {
+      "label": 1,
+      "word": "syrup",
+      "word_id": "w_00fbb135c6f21883"
+    },
+    {
+      "label": 1,
+      "word": "annoy",
+      "word_id": "w_8adff271f5972f9c"
+    },
+    {
+      "label": 0,
+      "word": "invoice",
+      "word_id": "w_baeba7e7b9ec453e"
+    },
+    {
+      "label": 0,
+      "word": "jockey",
+      "word_id": "w_190ad71c99439848"
+    },
+    {
+      "label": 0,
+      "word": "puddle",
+      "word_id": "w_bce302f015d52217"
+    },
+    {
+      "label": 1,
+      "word": "arctic",
+      "word_id": "w_8fa68a8ce5bffb5c"
+    },
+    {
+      "label": 1,
+      "word": "tier",
+      "word_id": "w_600279c8212f5208"
+    },
+    {
+      "label": 0,
+      "word": "hurdle",
+      "word_id": "w_fe3b2db87519c401"
+    },
+    {
+      "label": 1,
+      "word": "wrestle",
+      "word_id": "w_4cacb5b2baf0ecb4"
+    },
+    {
+      "label": 1,
+      "word": "disgraceful",
+      "word_id": "w_ab4b0fd393507229"
+    },
+    {
+      "label": 1,
+      "word": "intermission",
+      "word_id": "w_de0351fdf5008ecd"
+    },
+    {
+      "label": 1,
+      "word": "cynical",
+      "word_id": "w_a1a2aafe9ae6210a"
+    },
+    {
+      "label": 0,
+      "word": "woodland",
+      "word_id": "w_b9fe8a321b895de0"
+    },
+    {
+      "label": 1,
+      "word": "disposition",
+      "word_id": "w_9055f0cdbfd52ad5"
+    },
+    {
+      "label": 1,
+      "word": "eccentric",
+      "word_id": "w_a77c1b28f3e4696a"
+    },
+    {
+      "label": 1,
+      "word": "stature",
+      "word_id": "w_b08d63d0284f906e"
+    },
+    {
+      "label": 1,
+      "word": "reliance",
+      "word_id": "w_6166afad3a8d9f4d"
+    },
+    {
+      "label": 1,
+      "word": "astronomer",
+      "word_id": "w_1394cf203ad522c4"
+    },
+    {
+      "label": 0,
+      "word": "deposition",
+      "word_id": "w_cf69690755a30c27"
+    },
+    {
+      "label": 1,
+      "word": "leach",
+      "word_id": "w_671da8bd338c469e"
+    },
+    {
+      "label": 0,
+      "word": "prevailing",
+      "word_id": "w_0774b896e7d342db"
+    },
+    {
+      "label": 1,
+      "word": "emigrant",
+      "word_id": "w_c393e04de4d6a4f7"
+    },
+    {
+      "label": 0,
+      "word": "watercolor",
+      "word_id": "w_9e83669783817428"
+    },
+    {
+      "label": 1,
+      "word": "nitrogen",
+      "word_id": "w_d80dab391d3d7475"
+    },
+    {
+      "label": 0,
+      "word": "salvage",
+      "word_id": "w_ae6f51ae61b88a81"
+    },
+    {
+      "label": 1,
+      "word": "snail",
+      "word_id": "w_9054cc2304e6ca6a"
+    },
+    {
+      "label": 1,
+      "word": "digestion",
+      "word_id": "w_15ff67ac66cc678c"
+    },
+    {
+      "label": 0,
+      "word": "pudding",
+      "word_id": "w_935a8fb1aaf10f37"
+    },
+    {
+      "label": 1,
+      "word": "trunk",
+      "word_id": "w_488784591515bd4c"
+    },
+    {
+      "label": 0,
+      "word": "shaft",
+      "word_id": "w_e5fc0e24a8cb15b2"
+    },
+    {
+      "label": 1,
+      "word": "installment",
+      "word_id": "w_d79985cdadcfd29d"
+    },
+    {
+      "label": 1,
+      "word": "insomnia",
+      "word_id": "w_b2719240e190e2a6"
+    },
+    {
+      "label": 1,
+      "word": "trance",
+      "word_id": "w_7f1345c21ae0a6aa"
+    },
+    {
+      "label": 1,
+      "word": "explode",
+      "word_id": "w_417460b2819bf2e6"
+    },
+    {
+      "label": 0,
+      "word": "breadth",
+      "word_id": "w_f86cca379782ca76"
+    },
+    {
+      "label": 0,
+      "word": "bleach",
+      "word_id": "w_ea1761e93aa5f286"
+    },
+    {
+      "label": 0,
+      "word": "grower",
+      "word_id": "w_e3d1d35a11798675"
+    },
+    {
+      "label": 1,
+      "word": "synthesis",
+      "word_id": "w_6c943beb4da76870"
+    },
+    {
+      "label": 1,
+      "word": "peel",
+      "word_id": "w_9e858e757965b5cb"
+    },
+    {
+      "label": 1,
+      "word": "aha",
+      "word_id": "w_35bee85a5ccc9340"
+    },
+    {
+      "label": 0,
+      "word": "coop",
+      "word_id": "w_786e986d9f3be89a"
+    },
+    {
+      "label": 0,
+      "word": "boutique",
+      "word_id": "w_f65c756345243736"
+    },
+    {
+      "label": 1,
+      "word": "cram",
+      "word_id": "w_374ac6e7e7e8a376"
+    },
+    {
+      "label": 1,
+      "word": "van",
+      "word_id": "w_efa44987b6e36a90"
+    },
+    {
+      "label": 1,
+      "word": "surfing",
+      "word_id": "w_12ca7485bbbe5db8"
+    },
+    {
+      "label": 0,
+      "word": "avail",
+      "word_id": "w_255e5614f0427004"
+    },
+    {
+      "label": 1,
+      "word": "tongs",
+      "word_id": "w_a18c6e69c1a57980"
+    },
+    {
+      "label": 1,
+      "word": "regulatory",
+      "word_id": "w_1bf17bb6c76709bd"
+    },
+    {
+      "label": 0,
+      "word": "toll",
+      "word_id": "w_3cc82b67048771f0"
+    },
+    {
+      "label": 1,
+      "word": "wheat",
+      "word_id": "w_7f572f2b5a5ded40"
+    },
+    {
+      "label": 1,
+      "word": "blade",
+      "word_id": "w_067cb2b4d11bea74"
+    },
+    {
+      "label": 1,
+      "word": "trillion",
+      "word_id": "w_7ca71019f55a3a6c"
+    },
+    {
+      "label": 1,
+      "word": "striker",
+      "word_id": "w_5ea77232e5c2a228"
+    },
+    {
+      "label": 1,
+      "word": "tin",
+      "word_id": "w_f269197686c56c43"
+    },
+    {
+      "label": 1,
+      "word": "loudspeaker",
+      "word_id": "w_38addb6ee0565693"
+    },
+    {
+      "label": 0,
+      "word": "vest",
+      "word_id": "w_7703ba73d7ded8ab"
+    },
+    {
+      "label": 1,
+      "word": "wrinkle",
+      "word_id": "w_a72cc496d582bfc2"
+    },
+    {
+      "label": 1,
+      "word": "leopard",
+      "word_id": "w_0438d4841513b433"
+    },
+    {
+      "label": 1,
+      "word": "mutant",
+      "word_id": "w_040feba8916aa351"
+    },
+    {
+      "label": 1,
+      "word": "awesome",
+      "word_id": "w_03d67c263c27a453"
+    },
+    {
+      "label": 1,
+      "word": "dictation",
+      "word_id": "w_56285ca5c67afc21"
+    },
+    {
+      "label": 1,
+      "word": "saddle",
+      "word_id": "w_25eb89bfd62edc1f"
+    },
+    {
+      "label": 0,
+      "word": "placard",
+      "word_id": "w_a640aff294a6753b"
+    },
+    {
+      "label": 0,
+      "word": "pod",
+      "word_id": "w_91edd4009c4adeb5"
+    },
+    {
+      "label": 1,
+      "word": "haven",
+      "word_id": "w_b4ee299387297205"
+    },
+    {
+      "label": 0,
+      "word": "poach",
+      "word_id": "w_878c96ddc0d41ec8"
+    },
+    {
+      "label": 1,
+      "word": "instinctive",
+      "word_id": "w_a59f12f4f150d996"
+    },
+    {
+      "label": 1,
+      "word": "hypertension",
+      "word_id": "w_ef0055aa3063db6b"
+    },
+    {
+      "label": 1,
+      "word": "encircle",
+      "word_id": "w_e21d0c4110b8fa79"
+    },
+    {
+      "label": 1,
+      "word": "pullover",
+      "word_id": "w_62c51bcd9c877072"
+    },
+    {
+      "label": 1,
+      "word": "modulate",
+      "word_id": "w_1ddab0cacc109133"
+    },
+    {
+      "label": 1,
+      "word": "inferiority",
+      "word_id": "w_aab5241dbeb89225"
+    },
+    {
+      "label": 1,
+      "word": "interruption",
+      "word_id": "w_8f80614ea75d1ac6"
+    },
+    {
+      "label": 1,
+      "word": "bride",
+      "word_id": "w_bbd39e73eb578aa0"
+    },
+    {
+      "label": 0,
+      "word": "cordial",
+      "word_id": "w_967f1d74823d7431"
+    },
+    {
+      "label": 1,
+      "word": "epoch",
+      "word_id": "w_8ac1f753a4a72dbd"
+    },
+    {
+      "label": 1,
+      "word": "weighty",
+      "word_id": "w_0cc764a47412d462"
+    },
+    {
+      "label": 1,
+      "word": "cultivation",
+      "word_id": "w_bb04d535117ad1fe"
+    },
+    {
+      "label": 1,
+      "word": "horoscope",
+      "word_id": "w_e9473619690ddee4"
+    },
+    {
+      "label": 1,
+      "word": "bass",
+      "word_id": "w_62abc4b47858de8a"
+    },
+    {
+      "label": 0,
+      "word": "launder",
+      "word_id": "w_390bfdcd9d555c35"
+    },
+    {
+      "label": 1,
+      "word": "warehouse",
+      "word_id": "w_4a35c0647dfb2fc0"
+    },
+    {
+      "label": 1,
+      "word": "layout",
+      "word_id": "w_207b877e13437b35"
+    },
+    {
+      "label": 1,
+      "word": "banish",
+      "word_id": "w_6cc4add5d661c6b2"
+    },
+    {
+      "label": 1,
+      "word": "immunity",
+      "word_id": "w_2c4c690ff64103e2"
+    },
+    {
+      "label": 1,
+      "word": "displease",
+      "word_id": "w_cb83eebb4b89ca33"
+    },
+    {
+      "label": 0,
+      "word": "complainant",
+      "word_id": "w_e8e8a9b244f5b356"
+    },
+    {
+      "label": 1,
+      "word": "herbal",
+      "word_id": "w_b320092521473be3"
+    },
+    {
+      "label": 1,
+      "word": "scent",
+      "word_id": "w_8e6b2801689893e7"
+    },
+    {
+      "label": 1,
+      "word": "dogmatic",
+      "word_id": "w_7d2ba78db9b757f0"
+    },
+    {
+      "label": 1,
+      "word": "viable",
+      "word_id": "w_a7e05566f3eeac5f"
+    },
+    {
+      "label": 1,
+      "word": "decease",
+      "word_id": "w_2bb8d5f39707d82e"
+    },
+    {
+      "label": 1,
+      "word": "fond",
+      "word_id": "w_bf068ea95aa559c7"
+    },
+    {
+      "label": 1,
+      "word": "flip",
+      "word_id": "w_40f924d802a754f2"
+    },
+    {
+      "label": 1,
+      "word": "strangle",
+      "word_id": "w_e08aa339bcd48fdb"
+    },
+    {
+      "label": 1,
+      "word": "evangelist",
+      "word_id": "w_0ce33d66d74841e1"
+    }
+  ],
+  "created_at": "2026-05-10T16:32:10.662211+00:00",
+  "feature_set": "rich",
+  "model": "budget_adaptive_refined_raw_switch500",
+  "profile": "fimmind",
+  "query_count": 100,
+  "version": 1
+}
