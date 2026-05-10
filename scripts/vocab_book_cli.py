@@ -616,12 +616,7 @@ def parse_additional_entries(
         word_idx = int(lower_to_idx[normalized])
         label = parse_answer_char(label_raw.strip())
         entries.append((word_idx, label))
-    # Deduplicate by word_idx with last assignment winning.
-    dedup: dict[int, int] = {}
-    for word_idx, label in entries:
-        dedup[word_idx] = label
-    out = sorted(dedup.items(), key=lambda item: idx_to_word[item[0]])
-    return out
+    return deduplicate_entries_preserving_input_order(entries)
 
 
 def collect_additional_entries_interactively(
@@ -648,11 +643,21 @@ def collect_additional_entries_interactively(
             print(exc)
             continue
         entries.append((word_idx, label))
-    dedup: dict[int, int] = {}
-    for word_idx, label in entries:
-        dedup[word_idx] = label
-    out = sorted(dedup.items(), key=lambda item: idx_to_word[item[0]])
-    return out
+    return deduplicate_entries_preserving_input_order(entries)
+
+
+def deduplicate_entries_preserving_input_order(entries: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    if len(entries) == 0:
+        return []
+    # Keep only the last assignment for each word, while preserving the
+    # relative order of those last assignments as entered by the user.
+    last_pos_by_word: dict[int, int] = {}
+    label_by_word: dict[int, int] = {}
+    for pos, (word_idx, label) in enumerate(entries):
+        last_pos_by_word[int(word_idx)] = pos
+        label_by_word[int(word_idx)] = int(label)
+    ordered_words = sorted(last_pos_by_word.items(), key=lambda item: item[1])
+    return [(word_idx, label_by_word[word_idx]) for word_idx, _ in ordered_words]
 
 
 def parse_query_words(query_words: str) -> list[str]:
