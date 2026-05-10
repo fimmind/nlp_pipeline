@@ -80,6 +80,13 @@ class BookAnalysis:
     one_unknown_sentences: list[tuple[str, str, float]]
 
 
+@dataclass(frozen=True)
+class SentenceQueryMatch:
+    sentence: str
+    unknown_items: list[tuple[str, float]]
+    known_token_count: int
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Estimate book vocabulary difficulty from a 100-word user profile.")
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
@@ -104,6 +111,12 @@ def parse_args() -> argparse.Namespace:
         "--add-words-interactive",
         action="store_true",
         help="Interactively append or update additional known/unknown word labels in the saved profile.",
+    )
+    parser.add_argument(
+        "--query-words",
+        type=str,
+        default=None,
+        help="Comma-separated words to query, e.g. \"apple,banana\".",
     )
     return parser.parse_args()
 
@@ -642,6 +655,10 @@ def collect_additional_entries_interactively(
     return out
 
 
+def parse_query_words(query_words: str) -> list[str]:
+    return [normalize_word(part) for part in query_words.split(",") if normalize_word(part) != ""]
+
+
 def apply_additional_entries(
     observed_word_ids: np.ndarray,
     observed_labels: np.ndarray,
@@ -878,6 +895,97 @@ def print_word_rows(rows: list[tuple[str, float, int]]) -> None:
         print(f"  {word:<24} p_known={probability:.3f}  count={count}")
 
 
+def build_last_observed_map(observed_word_ids: np.ndarray, observed_labels: np.ndarray) -> dict[int, tuple[int, int]]:
+    out: dict[int, tuple[int, int]] = {}
+    for pos, (word_idx, label) in enumerate(zip(observed_word_ids.tolist(), observed_labels.tolist()), start=1):
+        out[int(word_idx)] = (int(label), pos)
+    return out
+
+
+def find_query_word_sentences(
+    query_word: str,
+    book_text: str,
+    lower_to_idx: dict[str, int],
+    probs_all_words: np.ndarray,
+    threshold: float,
+) -> list[SentenceQueryMatch]:
+    rows: list[SentenceQueryMatch] = []
+    for sentence in split_sentences(book_text):
+        raw_tokens = [match.group(0) for match in WORD_RE.finditer(sentence)]
+        normalized_tokens = [normalize_word(token) for token in raw_tokens]
+        if query_word not in normalized_tokens:
+            continue
+        unknown_items: list[tuple[str, float]] = []
+        known_count = 0
+        seen_unknown: set[str] = set()
+        for token in normalized_tokens:
+            word_idx = lower_to_idx.get(token)
+            if word_idx is None:
+                continue
+            probability = float(probs_all_words[int(word_idx)])
+            if probability < threshold:
+                if token not in seen_unknown:
+                    unknown_items.append((token, probability))
+                    seen_unknown.add(token)
+            else:
+                known_count += 1
+        rows.append(SentenceQueryMatch(sentence=sentence, unknown_items=unknown_items, known_token_count=known_count))
+    rows.sort(key=lambda row: (len(row.unknown_items), -row.known_token_count, row.sentence))
+    return rows
+
+
+def print_query_word_report(
+    query_words: list[str],
+    lower_to_idx: dict[str, int],
+    idx_to_word: dict[int, str],
+    probs_all_words: np.ndarray,
+    observed_word_ids: np.ndarray,
+    observed_labels: np.ndarray,
+    threshold: float,
+    book_path: Path | None,
+) -> None:
+    if len(query_words) == 0:
+        return
+    observed_map = build_last_observed_map(observed_word_ids, observed_labels)
+    book_text: str | None = None
+    if book_path is not None:
+        book_text = book_path.read_text(encoding="utf-8", errors="ignore")
+    print("\n=== Query Words ===")
+    for word in query_words:
+        print(f"\nWord: {word}")
+        word_idx = lower_to_idx.get(word)
+        if word_idx is None:
+            print("  Not in model vocabulary.")
+            continue
+        canonical_word = idx_to_word[int(word_idx)]
+        probability = float(probs_all_words[int(word_idx)])
+        predicted_label = "known" if probability >= threshold else "unknown"
+        print(f"  Model prediction: p_known={probability:.3f} -> {predicted_label}")
+        if int(word_idx) in observed_map:
+            observed_label, observed_pos = observed_map[int(word_idx)]
+            observed_text = "known" if observed_label == 1 else "unknown"
+            print(f"  Observed before: yes (last observed state={observed_text}, observation_index={observed_pos})")
+        else:
+            print("  Observed before: no")
+        if book_text is not None:
+            rows = find_query_word_sentences(
+                query_word=word,
+                book_text=book_text,
+                lower_to_idx=lower_to_idx,
+                probs_all_words=probs_all_words,
+                threshold=threshold,
+            )
+            print(f"  Sentences in book sorted by predicted unknown-word count (least -> most): {len(rows)}")
+            if len(rows) == 0:
+                print("  No matching sentences found.")
+            for idx, row in enumerate(rows, start=1):
+                unknown_desc = ", ".join([f"{unknown_word}:{prob:.3f}" for unknown_word, prob in row.unknown_items])
+                if unknown_desc == "":
+                    unknown_desc = "none"
+                print(f"    {idx}. unknown_count={len(row.unknown_items)} known_token_count={row.known_token_count} unknown_words=[{unknown_desc}]")
+                print(f"       {row.sentence}")
+
+
 def main() -> None:
     args = parse_args()
     if args.list_models:
@@ -971,16 +1079,30 @@ def main() -> None:
         disable_cache=args.disable_cache,
     )
 
-    book_path = select_book(args.data_dir / "example_texts", args.book)
-    analysis = analyze_book(
-        path=book_path,
-        lower_to_idx=lower_to_idx,
-        idx_to_word=idx_to_word,
-        probs_all_words=probs_all_words,
-        threshold=args.known_threshold,
-        seed=args.seed,
-    )
-    print_analysis(analysis)
+    book_path: Path | None = None
+    if args.book is not None:
+        book_path = select_book(args.data_dir / "example_texts", args.book)
+        analysis = analyze_book(
+            path=book_path,
+            lower_to_idx=lower_to_idx,
+            idx_to_word=idx_to_word,
+            probs_all_words=probs_all_words,
+            threshold=args.known_threshold,
+            seed=args.seed,
+        )
+        print_analysis(analysis)
+    query_words = parse_query_words(args.query_words) if args.query_words is not None else []
+    if len(query_words) > 0:
+        print_query_word_report(
+            query_words=query_words,
+            lower_to_idx=lower_to_idx,
+            idx_to_word=idx_to_word,
+            probs_all_words=probs_all_words,
+            observed_word_ids=observed_word_ids,
+            observed_labels=observed_labels,
+            threshold=args.known_threshold,
+            book_path=book_path,
+        )
 
 
 if __name__ == "__main__":

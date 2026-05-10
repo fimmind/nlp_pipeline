@@ -295,6 +295,49 @@ OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
   --book AiW.txt
 ```
 
+### Add Known/Unknown Words Without Retaking Test
+
+You can append or update labels in an existing profile:
+
+```bash
+scripts/vocab_book_cli.sh \
+  --profile your_name \
+  --model rasch \
+  --book AiW.txt \
+  --add-words "kinship=known,mixture=unknown"
+```
+
+Interactive add/update mode:
+
+```bash
+scripts/vocab_book_cli.sh \
+  --profile your_name \
+  --model rasch \
+  --book AiW.txt \
+  --add-words-interactive
+```
+
+When profile labels are changed, stale probability caches are invalidated automatically and rebuilt consistently.
+
+### Query Specific Words
+
+Use `--query-words` with comma-separated words:
+
+```bash
+scripts/vocab_book_cli.sh \
+  --profile your_name \
+  --model rasch \
+  --book AiW.txt \
+  --query-words "rabbit,alice,kinship"
+```
+
+For each queried word the script prints:
+
+1. model prediction (`p_known` and known/unknown decision),
+2. whether the word was observed in the profile before, including the last observed state,
+3. when `--book` is provided: sentences containing the queried word, sorted by predicted unknown-word count (least to most).  
+Alongside each sentence it prints unknown words in that sentence and their model predictions.
+
 ### Book Estimate Output
 
 The script prints:
