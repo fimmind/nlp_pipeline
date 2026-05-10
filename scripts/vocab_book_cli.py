@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import pickle
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -15,7 +17,7 @@ import pandas as pd
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
-from vocab_benchmark.data import load_all
+from vocab_benchmark.data import load_all, load_words
 from vocab_benchmark.estimators.base import Estimator, UserState
 from vocab_benchmark.estimators.ensemble import BudgetAdaptiveEnsembleEstimator, WeightedAveragedEnsembleEstimator
 from vocab_benchmark.estimators.fasttext_kernel import FastTextKernelLogisticConfig, FastTextKernelLogisticEstimator
@@ -90,6 +92,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--known-threshold", type=float, default=0.5)
     parser.add_argument("--model", type=str, default=DEFAULT_MODEL_KEY, choices=sorted(MODEL_HELP.keys()))
     parser.add_argument("--list-models", action="store_true", help="Print available models and exit.")
+    parser.add_argument("--cache-dir", type=Path, default=Path("data/cache/vocab_book_cli"))
+    parser.add_argument("--disable-cache", action="store_true", help="Disable model/probability caches.")
     return parser.parse_args()
 
 
@@ -254,19 +258,113 @@ def print_model_catalog() -> None:
         print(f"  {key:<24} est_precision={est_text}  {MODEL_HELP[key]}")
 
 
-def load_model_context(data_dir: Path) -> tuple[pd.DataFrame, np.ndarray, pd.DataFrame, dict[str, int], dict[str, int], dict[str, int]]:
+def _file_signature(path: Path) -> str:
+    if not path.exists():
+        return f"{path}:missing"
+    stat = path.stat()
+    return f"{path}:{stat.st_size}:{int(stat.st_mtime)}"
+
+
+def dataset_fingerprint(data_dir: Path) -> str:
+    required = [
+        data_dir / "processed" / "responses_static.csv",
+        data_dir / "processed" / "words.csv",
+        data_dir / "processed" / "frequency.csv",
+        data_dir / "processed" / "embeddings.npy",
+        data_dir / "processed" / "embeddings_metadata.json",
+    ]
+    payload = "\n".join(_file_signature(path) for path in required)
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+
+
+def profile_fingerprint(observed_word_ids: np.ndarray, observed_labels: np.ndarray) -> str:
+    h = hashlib.sha1()
+    h.update(observed_word_ids.astype(np.int32).tobytes())
+    h.update(observed_labels.astype(np.int32).tobytes())
+    return h.hexdigest()
+
+
+def model_cache_path(cache_dir: Path, model_key: str, data_fp: str) -> Path:
+    return cache_dir / "models" / f"{model_key}_{data_fp}.pkl"
+
+
+def probability_cache_path(cache_dir: Path, model_key: str, data_fp: str, profile_fp: str) -> Path:
+    return cache_dir / "probabilities" / f"{model_key}_{data_fp}_{profile_fp}.npy"
+
+
+def load_or_fit_estimator(
+    model_key: str,
+    seed: int,
+    response_frame: pd.DataFrame,
+    x_words: np.ndarray,
+    cache_dir: Path,
+    data_fp: str,
+    disable_cache: bool,
+) -> Estimator:
+    cache_path = model_cache_path(cache_dir, model_key, data_fp)
+    if not disable_cache and cache_path.exists():
+        with cache_path.open("rb") as f:
+            estimator = pickle.load(f)
+        print(f"Loaded cached fitted model: {cache_path}")
+        return estimator
+    estimator = build_estimator(model_key, seed)
+    estimator.fit(response_frame, x_words)
+    if not disable_cache:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        with cache_path.open("wb") as f:
+            pickle.dump(estimator, f, protocol=pickle.HIGHEST_PROTOCOL)
+        print(f"Saved cached fitted model: {cache_path}")
+    return estimator
+
+
+def load_or_compute_probabilities(
+    estimator: Estimator,
+    state: UserState,
+    n_words: int,
+    cache_dir: Path,
+    model_key: str,
+    data_fp: str,
+    profile_fp: str,
+    disable_cache: bool,
+) -> np.ndarray:
+    cache_path = probability_cache_path(cache_dir, model_key, data_fp, profile_fp)
+    if not disable_cache and cache_path.exists():
+        probs = np.load(cache_path)
+        if probs.shape == (n_words,):
+            print(f"Loaded cached probabilities: {cache_path}")
+            return probs.astype(np.float32)
+    candidate_word_ids = np.arange(n_words, dtype=np.int32)
+    probs = estimator.predict_proba(state, candidate_word_ids).astype(np.float32)
+    if probs.shape != (n_words,):
+        raise ValueError(f"invalid probability shape: expected {(n_words,)}, got {probs.shape}")
+    if not disable_cache:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        np.save(cache_path, probs)
+        print(f"Saved cached probabilities: {cache_path}")
+    return probs
+
+
+def load_word_context(data_dir: Path) -> tuple[pd.DataFrame, dict[str, int], dict[str, int], dict[int, str]]:
+    words = load_words(data_dir).copy()
+    word_index = build_word_index(words)
+    lower_to_idx: dict[str, int] = {}
+    idx_to_word: dict[int, str] = {}
+    for idx, row in enumerate(words[["word", "word_id"]].itertuples(index=False)):
+        normalized = normalize_word(str(row.word))
+        if normalized and normalized not in lower_to_idx:
+            lower_to_idx[normalized] = word_index[str(row.word_id)]
+        idx_to_word[idx] = str(row.word)
+    return words, word_index, lower_to_idx, idx_to_word
+
+
+def load_full_model_context(data_dir: Path) -> tuple[pd.DataFrame, np.ndarray, pd.DataFrame]:
     loaded = load_all(data_dir)
     words = loaded.words.copy()
     x_words = build_word_feature_matrix(words, loaded.embeddings, loaded.frequency, feature_set="rich")
     user_index = {u: i for i, u in enumerate(sorted(loaded.responses_static["user_id"].astype(str).unique().tolist()))}
     word_index = build_word_index(words)
     response_frame = build_response_frame(loaded.responses_static, user_index, word_index)
-    lower_to_idx: dict[str, int] = {}
-    for row in words[["word", "word_id"]].itertuples(index=False):
-        normalized = normalize_word(str(row.word))
-        if normalized and normalized not in lower_to_idx:
-            lower_to_idx[normalized] = word_index[str(row.word_id)]
-    return words, x_words, response_frame, word_index, user_index, lower_to_idx
+    return words, x_words, response_frame
 
 
 def build_query_words(response_frame: pd.DataFrame, sequence_len: int, seed: int) -> np.ndarray:
@@ -428,10 +526,10 @@ def split_sentences(text: str) -> list[str]:
     return [match.group(0).strip() for match in SENTENCE_RE.finditer(text) if match.group(0).strip()]
 
 
-def predict_for_book_words(estimator: Estimator, state: UserState, word_indices: np.ndarray) -> dict[int, float]:
+def predict_for_book_words(probs_all_words: np.ndarray, word_indices: np.ndarray) -> dict[int, float]:
     if len(word_indices) == 0:
         return {}
-    probs = estimator.predict_proba(state, word_indices.astype(np.int32))
+    probs = probs_all_words[word_indices.astype(np.int32)]
     return {int(word_idx): float(prob) for word_idx, prob in zip(word_indices.tolist(), probs.tolist())}
 
 
@@ -439,8 +537,7 @@ def analyze_book(
     path: Path,
     lower_to_idx: dict[str, int],
     idx_to_word: dict[int, str],
-    estimator: Estimator,
-    state: UserState,
+    probs_all_words: np.ndarray,
     threshold: float,
     seed: int,
 ) -> BookAnalysis:
@@ -456,7 +553,7 @@ def analyze_book(
         elif token.normalized not in word_to_idx:
             word_to_idx[token.normalized] = int(token.word_idx)
     unique_indices = np.array(sorted(set(word_to_idx.values())), dtype=np.int32)
-    probabilities = predict_for_book_words(estimator, state, unique_indices)
+    probabilities = predict_for_book_words(probs_all_words, unique_indices)
 
     expected_unknown_token_count = 0
     expected_unknown_types: set[str] = {word for word, idx in word_to_idx.items() if probabilities[int(idx)] < threshold}
@@ -573,8 +670,8 @@ def main() -> None:
     if args.known_threshold <= 0.0 or args.known_threshold >= 1.0:
         raise ValueError("known-threshold must be between 0 and 1")
 
-    words, x_words, response_frame, word_index, _user_index, lower_to_idx = load_model_context(args.data_dir)
-    idx_to_word = {idx: str(row.word) for idx, row in enumerate(words[["word"]].itertuples(index=False))}
+    data_fp = dataset_fingerprint(args.data_dir)
+    words, word_index, lower_to_idx, idx_to_word = load_word_context(args.data_dir)
     path = profile_path(args.profile_dir, args.profile)
     if path.exists() and not args.retake_test:
         observed_word_ids, observed_labels, payload = load_profile(path, word_index)
@@ -591,19 +688,74 @@ def main() -> None:
         save_profile(path, args.profile, words, observed_word_ids, observed_labels)
         print(f"Saved profile: {path}")
 
-    estimator = build_estimator(args.model, args.seed)
-    print(f"Using model: {args.model} ({estimator.name})")
-    estimator.fit(response_frame, x_words)
-    state = estimator.initialize_user_state()
-    state = estimator.update_user_state(state, observed_word_ids, observed_labels)
+    profile_fp = profile_fingerprint(observed_word_ids, observed_labels)
+    prob_cache_path = probability_cache_path(args.cache_dir, args.model, data_fp, profile_fp)
+    probs_all_words: np.ndarray
+    if not args.disable_cache and prob_cache_path.exists():
+        cached_probs = np.load(prob_cache_path)
+        if cached_probs.shape == (len(words),):
+            print(f"Using model: {args.model} (cached probabilities)")
+            probs_all_words = cached_probs.astype(np.float32)
+            print(f"Loaded cached probabilities: {prob_cache_path}")
+        else:
+            words_full, x_words, response_frame = load_full_model_context(args.data_dir)
+            if len(words_full) != len(words):
+                raise ValueError("word table mismatch between lightweight and full context")
+            estimator = load_or_fit_estimator(
+                model_key=args.model,
+                seed=args.seed,
+                response_frame=response_frame,
+                x_words=x_words,
+                cache_dir=args.cache_dir,
+                data_fp=data_fp,
+                disable_cache=args.disable_cache,
+            )
+            print(f"Using model: {args.model} ({estimator.name})")
+            state = estimator.initialize_user_state()
+            state = estimator.update_user_state(state, observed_word_ids, observed_labels)
+            probs_all_words = load_or_compute_probabilities(
+                estimator=estimator,
+                state=state,
+                n_words=x_words.shape[0],
+                cache_dir=args.cache_dir,
+                model_key=args.model,
+                data_fp=data_fp,
+                profile_fp=profile_fp,
+                disable_cache=args.disable_cache,
+            )
+    else:
+        words_full, x_words, response_frame = load_full_model_context(args.data_dir)
+        if len(words_full) != len(words):
+            raise ValueError("word table mismatch between lightweight and full context")
+        estimator = load_or_fit_estimator(
+            model_key=args.model,
+            seed=args.seed,
+            response_frame=response_frame,
+            x_words=x_words,
+            cache_dir=args.cache_dir,
+            data_fp=data_fp,
+            disable_cache=args.disable_cache,
+        )
+        print(f"Using model: {args.model} ({estimator.name})")
+        state = estimator.initialize_user_state()
+        state = estimator.update_user_state(state, observed_word_ids, observed_labels)
+        probs_all_words = load_or_compute_probabilities(
+            estimator=estimator,
+            state=state,
+            n_words=x_words.shape[0],
+            cache_dir=args.cache_dir,
+            model_key=args.model,
+            data_fp=data_fp,
+            profile_fp=profile_fp,
+            disable_cache=args.disable_cache,
+        )
 
     book_path = select_book(args.data_dir / "example_texts", args.book)
     analysis = analyze_book(
         path=book_path,
         lower_to_idx=lower_to_idx,
         idx_to_word=idx_to_word,
-        estimator=estimator,
-        state=state,
+        probs_all_words=probs_all_words,
         threshold=args.known_threshold,
         seed=args.seed,
     )

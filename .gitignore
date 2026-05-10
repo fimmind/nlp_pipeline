@@ -44,3 +44,6 @@ data/raw/duolingo_hlr/learning_traces.csv.gz
 data/processed/
 data/splits/
 data/DATASET_CARD.json
+
+# Vocab book CLI caches
+data/cache/vocab_book_cli/
