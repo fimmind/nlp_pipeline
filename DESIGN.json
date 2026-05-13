@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-05-13T00:00:00Z",
+  "title": "Design System: Vocabulary Reader Assistant",
+  "extensions": {
+    "northStar": "Quiet Study Desk",
+    "register": "product",
+    "colorMeta": {
+      "canvas": { "role": "neutral", "displayName": "Paper Canvas", "canonical": "#F4EFE7", "tonalRamp": ["#FCFAF6", "#F4EFE7", "#ECE3D7"] },
+      "surface": { "role": "neutral", "displayName": "Page Surface", "canonical": "#FCFAF6", "tonalRamp": ["#FFFDFA", "#FCFAF6", "#F2ECE3"] },
+      "text-primary": { "role": "neutral", "displayName": "Primary Ink", "canonical": "#23201D", "tonalRamp": ["#5D554D", "#3F3934", "#23201D"] },
+      "primary-action": { "role": "primary", "displayName": "Ink Action", "canonical": "#2C2824", "tonalRamp": ["#59524A", "#2C2824", "#12100F"] },
+      "success-action": { "role": "secondary", "displayName": "Ink Support", "canonical": "#2C2824", "tonalRamp": ["#59524A", "#2C2824", "#12100F"] },
+      "danger-action": { "role": "tertiary", "displayName": "Ink Outline", "canonical": "#2C2824", "tonalRamp": ["#59524A", "#2C2824", "#12100F"] }
+    },
+    "elevation": {
+      "panelLift": "0 12px 32px rgba(20, 35, 50, 0.08)",
+      "philosophy": "Depth is structural and subdued; controls remain visually flat."
+    },
+    "motion": {
+      "duration": "180ms",
+      "easing": "ease-out",
+      "reducedMotion": "Transitions should be removed when prefers-reduced-motion is enabled."
+    },
+    "principles": [
+      "Readable first, decorative never.",
+      "One clear action intent per section.",
+      "Algorithmic output must remain interpretable at a glance.",
+      "Consistency beats novelty in repeated reading workflows."
+    ]
+  }
+}
