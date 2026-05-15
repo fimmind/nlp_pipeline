@@ -1,0 +1,4 @@
+q,estimator,strategy,groups,temp,residual_prior,balanced_accuracy,accuracy,auroc,runtime_seconds
+100,grouped_residual_irt_anchor_cosine_g16_t010_rp200,anchor_cosine,16,0.1,2.0,0.7864542260318933,0.8179425485416492,0.8847484251827986,0.4541870753749606
+200,grouped_residual_irt_pca_quantile_g8_t025_rp100,pca_quantile,8,0.25,1.0,0.7912739799229466,0.8221157921505468,0.8860774732134709,0.9440949684999822
+1000,grouped_residual_irt_anchor_cosine_g64_t010_rp100,anchor_cosine,64,0.1,1.0,0.7861301385416777,0.8400870692006911,0.899394979762571,1.329375363687518

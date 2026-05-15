@@ -16,7 +16,7 @@ from .fasttext_kernel import (
 )
 from .fasttext_semantic import FastTextSemanticConfig, FastTextSemanticPrototypeEstimator
 from .graph import GraphLabelPropagationEstimator
-from .irt import BasicRaschFromAccuracyEstimator, RaschIRTOnlineEstimator, TwoPLIRTOnlineEstimator
+from .irt import BasicRaschFromAccuracyEstimator, GroupedResidualIRTOnlineEstimator, RaschIRTOnlineEstimator, TwoPLIRTOnlineEstimator
 from .mf import LowRankMFOnlineEstimator
 from .neural import AveragedEnsembleEstimator, NeuralEncoderDecoderEstimator, NeuralEstimatorConfig
 from .neural_advanced import NeuralMemoryMIRTConfig, NeuralMemoryMIRTEstimator
@@ -38,6 +38,7 @@ __all__ = [
     "DifficultyStratifiedBetaEstimator",
     "UserSimilarityKNNOnlineEstimator",
     "RaschIRTOnlineEstimator",
+    "GroupedResidualIRTOnlineEstimator",
     "BasicRaschFromAccuracyEstimator",
     "TwoPLIRTOnlineEstimator",
     "LowRankMFOnlineEstimator",

@@ -1,0 +1,4 @@
+category,estimator,balanced_accuracy,accuracy,auroc,delta_vs_twopl
+best_grouped,grouped_residual_irt_anchor_cosine_g64_t010_rp100,0.7861301385416777,0.8400870692006911,0.899394979762571,-0.01462421904883593
+best_grouped_twopl_ensemble,grouped_residual_irt_anchor_cosine_g64_t010_rp100_twopl_hybrid_w50_50_bm060,0.797931035356224,0.8396153496408111,0.8993938652098299,-0.0028233222342896047
+twopl_baseline,twopl_irt_online_baseline,0.8007543575905136,0.8392288806038011,0.8966877806169006,0.0

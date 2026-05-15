@@ -1,0 +1,2 @@
+estimator,q,balanced_accuracy,accuracy,nll,brier,auroc,runtime_seconds
+grouped_residual_irt_anchor_cosine_g8_t020_rp100,50,0.6549298435227248,0.5652744064060712,4.405314998841638,0.41925641837045086,0.698376341127577,0.11082443733334912
