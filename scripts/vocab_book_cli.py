@@ -27,10 +27,8 @@ if TYPE_CHECKING:
     from vocab_benchmark.query_policies import QueryPolicy
 
 
-WORD_RE = re.compile(r"[A-Za-z]+(?:['\u2019][A-Za-z]+)?")
-SENTENCE_RE = re.compile(r"[^.!?]+[.!?]+|[^.!?]+$")
 PROFILE_VERSION = 1
-BOOK_PREPROCESS_VERSION = 3
+BOOK_PREPROCESS_VERSION = 4
 MODEL_NAME = "budget_adaptive_refined_raw_switch500"
 DEFAULT_MODEL_KEY = "best_adaptive"
 MODEL_HELP: dict[str, str] = {
@@ -88,6 +86,12 @@ class SentenceTokens:
     sentence: str
     normalized_tokens: list[str]
     raw_token_count: int
+
+
+@dataclass(frozen=True)
+class ParsedSentence:
+    sentence: str
+    raw_tokens: list[str]
 
 
 PTB_TO_UPOS: dict[str, str] = {
@@ -244,6 +248,16 @@ def _load_contextual_deinflection_libs() -> tuple[Any, Any]:
     except LookupError:
         ensure_resource("taggers/averaged_perceptron_tagger", "averaged_perceptron_tagger")
     return nltk, lemminflect
+
+
+@lru_cache(maxsize=1)
+def _load_spacy_segmenter() -> Any:
+    import spacy
+
+    nlp = spacy.blank("en")
+    if "sentencizer" not in nlp.pipe_names:
+        nlp.add_pipe("sentencizer")
+    return nlp
 
 
 def _upos_from_ptb(tag: str) -> str:
@@ -1339,15 +1353,29 @@ def select_book(example_dir: Path, requested: str | None) -> Path:
         print(f"Enter a number from 1 to {len(books)}.")
 
 
-def split_sentences(text: str) -> list[str]:
-    return [match.group(0).strip() for match in SENTENCE_RE.finditer(text) if match.group(0).strip()]
+def parse_text_with_spacy(text: str) -> list[ParsedSentence]:
+    nlp = _load_spacy_segmenter()
+    doc = nlp(text)
+    rows: list[ParsedSentence] = []
+    for sent in doc.sents:
+        sent_text = sent.text.strip()
+        if sent_text == "":
+            continue
+        raw_tokens: list[str] = []
+        for token in sent:
+            token_text = token.text.strip()
+            if token_text == "":
+                continue
+            if token.is_alpha:
+                raw_tokens.append(token_text)
+        rows.append(ParsedSentence(sentence=sent_text, raw_tokens=raw_tokens))
+    return rows
 
 
 def preprocess_book_text(text: str, lower_to_idx: dict[str, int]) -> tuple[list[BookToken], list[SentenceTokens]]:
-    sentences = split_sentences(text)
-    sentence_raw_tokens: list[list[str]] = []
-    for sentence in sentences:
-        sentence_raw_tokens.append([match.group(0) for match in WORD_RE.finditer(sentence)])
+    parsed_sentences = parse_text_with_spacy(text)
+    sentences = [row.sentence for row in parsed_sentences]
+    sentence_raw_tokens = [row.raw_tokens for row in parsed_sentences]
 
     nltk, _ = _load_contextual_deinflection_libs()
     tagged_sentences = nltk.pos_tag_sents(sentence_raw_tokens, lang="eng")
