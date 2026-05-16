@@ -1,64 +1,57 @@
-from .base import Estimator, UserState
-from .baselines import DifficultyStratifiedBetaEstimator, GlobalWordPriorEstimator, UserRateDifficultyEstimator
-from .calibrated import (
-    BatchMedianCenteredEstimator,
-    OnlineThresholdCalibratedEstimator,
-    OnlineThresholdWordPriorEstimator,
-    ProbabilityPowerCalibratedEstimator,
-)
-from .collaborative import UserSimilarityKNNOnlineEstimator
-from .ensemble import WeightedAveragedEnsembleEstimator
-from .fasttext_kernel import (
-    FastTextKernelLogisticConfig,
-    FastTextKernelLogisticEstimator,
-    FastTextSVDRerankerConfig,
-    FastTextSVDRerankerEstimator,
-)
-from .fasttext_semantic import FastTextSemanticConfig, FastTextSemanticPrototypeEstimator
-from .graph import GraphLabelPropagationEstimator
-from .irt import BasicRaschFromAccuracyEstimator, GroupedResidualIRTOnlineEstimator, RaschIRTOnlineEstimator, TwoPLIRTOnlineEstimator
-from .mf import LowRankMFOnlineEstimator
-from .neural import AveragedEnsembleEstimator, NeuralEncoderDecoderEstimator, NeuralEstimatorConfig
-from .neural_advanced import NeuralMemoryMIRTConfig, NeuralMemoryMIRTEstimator
-from .observed_user_vote import ObservedMatchUserVoteEstimator
-from .online_user_logistic import OnlineUserLogisticEstimator
-from .personalized import PersonalizedHybridSignalEstimator, PersonalizedKNNPriorEstimator
-from .svd import SVDRidgeUserEstimator
-from .user_knn import UserKNNResponseEstimator
+from __future__ import annotations
 
-__all__ = [
-    "Estimator",
-    "UserState",
-    "GlobalWordPriorEstimator",
-    "OnlineThresholdWordPriorEstimator",
-    "OnlineThresholdCalibratedEstimator",
-    "BatchMedianCenteredEstimator",
-    "ProbabilityPowerCalibratedEstimator",
-    "UserRateDifficultyEstimator",
-    "DifficultyStratifiedBetaEstimator",
-    "UserSimilarityKNNOnlineEstimator",
-    "RaschIRTOnlineEstimator",
-    "GroupedResidualIRTOnlineEstimator",
-    "BasicRaschFromAccuracyEstimator",
-    "TwoPLIRTOnlineEstimator",
-    "LowRankMFOnlineEstimator",
-    "GraphLabelPropagationEstimator",
-    "WeightedAveragedEnsembleEstimator",
-    "FastTextKernelLogisticConfig",
-    "FastTextKernelLogisticEstimator",
-    "FastTextSVDRerankerConfig",
-    "FastTextSVDRerankerEstimator",
-    "FastTextSemanticConfig",
-    "FastTextSemanticPrototypeEstimator",
-    "NeuralEstimatorConfig",
-    "NeuralEncoderDecoderEstimator",
-    "AveragedEnsembleEstimator",
-    "NeuralMemoryMIRTConfig",
-    "NeuralMemoryMIRTEstimator",
-    "ObservedMatchUserVoteEstimator",
-    "OnlineUserLogisticEstimator",
-    "PersonalizedKNNPriorEstimator",
-    "PersonalizedHybridSignalEstimator",
-    "SVDRidgeUserEstimator",
-    "UserKNNResponseEstimator",
-]
+from importlib import import_module
+
+from .base import Estimator, UserState
+
+_EXPORTS: dict[str, str] = {
+    "Estimator": "base",
+    "UserState": "base",
+    "GlobalWordPriorEstimator": "baselines",
+    "OnlineThresholdWordPriorEstimator": "calibrated",
+    "OnlineThresholdCalibratedEstimator": "calibrated",
+    "BatchMedianCenteredEstimator": "calibrated",
+    "ProbabilityPowerCalibratedEstimator": "calibrated",
+    "UserRateDifficultyEstimator": "baselines",
+    "DifficultyStratifiedBetaEstimator": "baselines",
+    "UserSimilarityKNNOnlineEstimator": "collaborative",
+    "RaschIRTOnlineEstimator": "irt",
+    "GroupedResidualIRTOnlineEstimator": "irt",
+    "BasicRaschFromAccuracyEstimator": "irt",
+    "TwoPLIRTOnlineEstimator": "irt",
+    "LowRankMFOnlineEstimator": "mf",
+    "GraphLabelPropagationEstimator": "graph",
+    "WeightedAveragedEnsembleEstimator": "ensemble",
+    "FastTextKernelLogisticConfig": "fasttext_kernel",
+    "FastTextKernelLogisticEstimator": "fasttext_kernel",
+    "FastTextSVDRerankerConfig": "fasttext_kernel",
+    "FastTextSVDRerankerEstimator": "fasttext_kernel",
+    "FastTextSemanticConfig": "fasttext_semantic",
+    "FastTextSemanticPrototypeEstimator": "fasttext_semantic",
+    "NeuralEstimatorConfig": "neural",
+    "NeuralEncoderDecoderEstimator": "neural",
+    "AveragedEnsembleEstimator": "neural",
+    "NeuralMemoryMIRTConfig": "neural_advanced",
+    "NeuralMemoryMIRTEstimator": "neural_advanced",
+    "ObservedMatchUserVoteEstimator": "observed_user_vote",
+    "OnlineUserLogisticEstimator": "online_user_logistic",
+    "PersonalizedKNNPriorEstimator": "personalized",
+    "PersonalizedHybridSignalEstimator": "personalized",
+    "SVDRidgeUserEstimator": "svd",
+    "UserKNNResponseEstimator": "user_knn",
+}
+
+__all__ = sorted(_EXPORTS.keys())
+
+
+def __getattr__(name: str) -> object:
+    if name not in _EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module = import_module(f"{__name__}.{_EXPORTS[name]}")
+    value = getattr(module, name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(globals().keys() | set(__all__))

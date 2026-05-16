@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from functools import lru_cache
 import hashlib
 import json
 import os
@@ -10,7 +11,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -19,18 +20,17 @@ os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
 from vocab_benchmark.data import load_all, load_words
 from vocab_benchmark.estimators.base import Estimator, UserState
-from vocab_benchmark.estimators.ensemble import BudgetAdaptiveEnsembleEstimator, WeightedAveragedEnsembleEstimator
-from vocab_benchmark.estimators.fasttext_kernel import FastTextKernelLogisticConfig, FastTextKernelLogisticEstimator
-from vocab_benchmark.estimators.irt import RaschIRTOnlineEstimator, TwoPLIRTOnlineEstimator
-from vocab_benchmark.estimators.observed_user_vote import ObservedMatchUserVoteEstimator
-from vocab_benchmark.estimators.online_user_logistic import OnlineUserLogisticEstimator
-from vocab_benchmark.estimators.svd import SVDRidgeUserEstimator
 from vocab_benchmark.features import build_response_frame, build_word_feature_matrix, build_word_index
+
+if TYPE_CHECKING:
+    from vocab_benchmark.estimators.ensemble import BudgetAdaptiveEnsembleEstimator
+    from vocab_benchmark.query_policies import QueryPolicy
 
 
 WORD_RE = re.compile(r"[A-Za-z]+(?:['\u2019][A-Za-z]+)?")
 SENTENCE_RE = re.compile(r"[^.!?]+[.!?]+|[^.!?]+$")
 PROFILE_VERSION = 1
+BOOK_PREPROCESS_VERSION = 2
 MODEL_NAME = "budget_adaptive_refined_raw_switch500"
 DEFAULT_MODEL_KEY = "best_adaptive"
 MODEL_HELP: dict[str, str] = {
@@ -44,6 +44,9 @@ MODEL_HELP: dict[str, str] = {
     "rasch_twopl_vote_user": "Non-neural four-way blend: Rasch + TwoPL + vote + user logreg.",
     "svd": "Fast latent collaborative non-neural model.",
     "fasttext_kernel": "Non-neural semantic kernel logistic model over fastText features.",
+    "grouped_irt": "Grouped residual IRT with soft groups from fastText embeddings.",
+    "grouped_irt_twopl_hybrid": "Grouped residual IRT blended with TwoPL IRT.",
+    "best_grouped_irt_model": "Best grouped residual IRT spec from best_grouped_irt_model.md (response12/g12/tau1.6/c12).",
 }
 MODEL_ESTIMATED_PRECISION: dict[str, float] = {
     "best_adaptive": 0.842,
@@ -56,6 +59,9 @@ MODEL_ESTIMATED_PRECISION: dict[str, float] = {
     "rasch_twopl_vote_user": 0.841,
     "svd": 0.809,
     "fasttext_kernel": 0.796,
+    "grouped_irt": 0.790,
+    "grouped_irt_twopl_hybrid": 0.798,
+    "best_grouped_irt_model": 0.893,
 }
 
 
@@ -88,57 +94,77 @@ class SentenceQueryMatch:
     known_token_count: int
 
 
-def infer_pos_hint(prev_token: str | None, next_token: str | None) -> str:
-    determiners = {"a", "an", "the", "this", "that", "these", "those", "my", "your", "our", "his", "her", "their"}
-    to_markers = {"to"}
-    be_forms = {"am", "is", "are", "was", "were", "be", "been", "being"}
-    pronouns = {"i", "you", "he", "she", "we", "they", "it"}
-    auxiliaries = {"do", "does", "did", "can", "could", "will", "would", "shall", "should", "may", "might", "must"}
-
-    if prev_token in to_markers:
-        return "verb"
-    if prev_token in be_forms:
-        return "verb_participle"
-    if prev_token in determiners:
-        return "noun"
-    if prev_token in pronouns or prev_token in auxiliaries:
-        return "verb"
-    if next_token in {"of", "and", "or"}:
-        return "noun"
-    return "any"
+@dataclass(frozen=True)
+class SentenceTokens:
+    sentence: str
+    normalized_tokens: list[str]
+    raw_token_count: int
 
 
-def deinflection_candidates(token: str) -> list[tuple[str, str]]:
-    candidates: list[tuple[str, str]] = [(token, "identity")]
-    if len(token) <= 2:
-        return candidates
+PTB_TO_WORDNET_POS: dict[str, str] = {
+    "J": "a",
+    "V": "v",
+    "N": "n",
+    "R": "r",
+}
 
-    def add(candidate: str, tag: str) -> None:
-        if len(candidate) >= 2 and all(ch.isalpha() or ch == "'" for ch in candidate):
-            candidates.append((candidate, tag))
 
-    if token.endswith("ies") and len(token) > 4:
-        add(token[:-3] + "y", "noun_plural")
-    if token.endswith("es") and len(token) > 3:
-        add(token[:-2], "noun_plural")
-    if token.endswith("s") and len(token) > 3 and not token.endswith("ss"):
-        add(token[:-1], "noun_plural")
+@lru_cache(maxsize=1)
+def _load_nltk_lemmatizer() -> Any:
+    import nltk
+    from nltk.stem import WordNetLemmatizer
 
-    if token.endswith("ied") and len(token) > 4:
-        add(token[:-3] + "y", "verb_past")
-    if token.endswith("ed") and len(token) > 3:
-        add(token[:-2], "verb_past")
-        add(token[:-1], "verb_past")
+    def ensure_resource(resource_path: str, package_name: str) -> None:
+        candidates = (resource_path, f"{resource_path}.zip")
+        for candidate in candidates:
+            try:
+                nltk.data.find(candidate)
+                return
+            except LookupError:
+                pass
+        success = nltk.download(package_name, quiet=True)
+        if not success:
+            raise RuntimeError(f"failed to download NLTK resource: {package_name}")
+        for candidate in candidates:
+            try:
+                nltk.data.find(candidate)
+                return
+            except LookupError:
+                pass
+        raise RuntimeError(f"downloaded NLTK resource but it was not found: {package_name}")
 
-    if token.endswith("ing") and len(token) > 5:
-        add(token[:-3], "verb_ing")
-        add(token[:-3] + "e", "verb_ing")
+    try:
+        ensure_resource("taggers/averaged_perceptron_tagger_eng", "averaged_perceptron_tagger_eng")
+    except LookupError:
+        ensure_resource("taggers/averaged_perceptron_tagger", "averaged_perceptron_tagger")
+    ensure_resource("corpora/wordnet", "wordnet")
+    ensure_resource("corpora/omw-1.4", "omw-1.4")
+    return nltk, WordNetLemmatizer()
 
-    if token.endswith("er") and len(token) > 4:
-        add(token[:-2], "adj_comp")
-    if token.endswith("est") and len(token) > 5:
-        add(token[:-3], "adj_super")
-    return candidates
+
+def _wordnet_pos_from_ptb(tag: str) -> str:
+    if len(tag) == 0:
+        return "n"
+    return PTB_TO_WORDNET_POS.get(tag[0], "n")
+
+
+def contextual_deinflect_tokens(raw_tokens: list[str], lower_to_idx: dict[str, int]) -> list[str]:
+    normalized = [normalize_word(token) for token in raw_tokens]
+    if len(normalized) == 0:
+        return []
+    nltk, lemmatizer = _load_nltk_lemmatizer()
+    tagged = nltk.pos_tag(normalized, lang="eng")
+    out: list[str] = []
+    for token, tag in tagged:
+        lemma = normalize_word(lemmatizer.lemmatize(token, _wordnet_pos_from_ptb(tag)))
+        if lemma in lower_to_idx:
+            out.append(lemma)
+            continue
+        if token in lower_to_idx:
+            out.append(token)
+            continue
+        out.append(lemma if lemma else token)
+    return out
 
 
 def pick_contextual_lemma(
@@ -147,49 +173,35 @@ def pick_contextual_lemma(
     next_token: str | None,
     lower_to_idx: dict[str, int],
 ) -> str:
-    candidates = deinflection_candidates(token)
-    hint = infer_pos_hint(prev_token, next_token)
-    best = token
-    best_score = -10_000.0
-    for candidate, tag in candidates:
-        score = 0.0
-        if candidate in lower_to_idx:
-            score += 100.0
-        if tag == "identity":
-            score += 5.0
-        if hint == "noun" and tag.startswith("noun_"):
-            score += 4.0
-        if hint == "verb" and tag.startswith("verb_"):
-            score += 4.0
-        if hint == "verb_participle" and tag == "verb_ing":
-            score += 4.0
-        if hint == "any":
-            score += 1.0
-        score -= 0.1 * abs(len(candidate) - len(token))
-        if score > best_score:
-            best = candidate
-            best_score = score
-    return best
-
-
-def contextual_deinflect_tokens(raw_tokens: list[str], lower_to_idx: dict[str, int]) -> list[str]:
-    normalized = [normalize_word(token) for token in raw_tokens]
-    out: list[str] = []
-    for idx, token in enumerate(normalized):
-        prev_token = normalized[idx - 1] if idx > 0 else None
-        next_token = normalized[idx + 1] if idx + 1 < len(normalized) else None
-        out.append(pick_contextual_lemma(token, prev_token, next_token, lower_to_idx))
-    return out
+    del prev_token, next_token
+    return contextual_deinflect_tokens([token], lower_to_idx)[0]
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Estimate book vocabulary difficulty from a 100-word user profile.")
+    parser = argparse.ArgumentParser(description="Estimate book vocabulary difficulty from a user profile quiz.")
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     parser.add_argument("--book", type=str, default=None, help="File name or path under data/example_texts.")
     parser.add_argument("--profile", type=str, default=None, help="Profile/user name used for saving and reusing answers.")
     parser.add_argument("--profile-dir", type=Path, default=Path("data/user_profiles"))
-    parser.add_argument("--retake-test", action="store_true", help="Ignore an existing profile and ask the 100 questions again.")
-    parser.add_argument("--answer-string", type=str, default=None, help="Automation helper: 100 chars from y/n/1/0/k/u.")
+    parser.add_argument("--retake-test", action="store_true", help="Ignore an existing profile and ask the quiz again.")
+    parser.add_argument("--quiz-size", type=int, default=100, help="Number of words in the initial quiz (default: 100).")
+    parser.add_argument(
+        "--quiz-strategy",
+        type=str,
+        default="auto",
+        choices=[
+            "auto",
+            "static",
+            "semirandom",
+            "adaptive_entropy",
+            "adaptive_uncertainty",
+            "adaptive_stochastic_entropy",
+            "adaptive_eer_fast",
+            "adaptive_hybrid_fast",
+        ],
+        help="How to choose quiz words. 'auto' uses adaptive_uncertainty for best_grouped_irt_model and static otherwise.",
+    )
+    parser.add_argument("--answer-string", type=str, default=None, help="Automation helper: quiz-size chars from y/n/1/0/k/u.")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--known-threshold", type=float, default=0.5)
     parser.add_argument("--model", type=str, default=DEFAULT_MODEL_KEY, choices=sorted(MODEL_HELP.keys()))
@@ -227,7 +239,12 @@ def profile_path(profile_dir: Path, profile_name: str) -> Path:
     return profile_dir / f"{safe}.json"
 
 
-def build_best_estimator() -> BudgetAdaptiveEnsembleEstimator:
+def build_best_estimator() -> "BudgetAdaptiveEnsembleEstimator":
+    from vocab_benchmark.estimators.ensemble import BudgetAdaptiveEnsembleEstimator, WeightedAveragedEnsembleEstimator
+    from vocab_benchmark.estimators.irt import RaschIRTOnlineEstimator, TwoPLIRTOnlineEstimator
+    from vocab_benchmark.estimators.observed_user_vote import ObservedMatchUserVoteEstimator
+    from vocab_benchmark.estimators.online_user_logistic import OnlineUserLogisticEstimator
+
     low_rasch = RaschIRTOnlineEstimator(prior_var=25.0, lr=1.0, n_fit_steps=20)
     low_rasch.name = "rasch_highbudget_var25"
     low_vote = ObservedMatchUserVoteEstimator(temperature=0.10, prior_blend=0.0, power=1.0)
@@ -277,6 +294,11 @@ def build_estimator(model_key: str, seed: int) -> Estimator:
     if model_key == "best_adaptive":
         return build_best_estimator()
     if model_key == "best_high_budget":
+        from vocab_benchmark.estimators.ensemble import WeightedAveragedEnsembleEstimator
+        from vocab_benchmark.estimators.irt import RaschIRTOnlineEstimator, TwoPLIRTOnlineEstimator
+        from vocab_benchmark.estimators.observed_user_vote import ObservedMatchUserVoteEstimator
+        from vocab_benchmark.estimators.online_user_logistic import OnlineUserLogisticEstimator
+
         rasch = RaschIRTOnlineEstimator(prior_var=25.0, lr=1.0, n_fit_steps=20)
         rasch.name = "rasch_highbudget_var25"
         twopl = TwoPLIRTOnlineEstimator(prior_var=25.0, lr=1.0, n_fit_steps=20)
@@ -297,18 +319,26 @@ def build_estimator(model_key: str, seed: int) -> Estimator:
             logit_bias=0.015,
         )
     if model_key == "rasch":
+        from vocab_benchmark.estimators.irt import RaschIRTOnlineEstimator
+
         estimator = RaschIRTOnlineEstimator(prior_var=25.0, lr=1.0, n_fit_steps=20)
         estimator.name = "rasch_highbudget_var25"
         return estimator
     if model_key == "twopl":
+        from vocab_benchmark.estimators.irt import TwoPLIRTOnlineEstimator
+
         estimator = TwoPLIRTOnlineEstimator(prior_var=25.0, lr=1.0, n_fit_steps=20)
         estimator.name = "twopl_highbudget_var25"
         return estimator
     if model_key == "vote":
+        from vocab_benchmark.estimators.observed_user_vote import ObservedMatchUserVoteEstimator
+
         estimator = ObservedMatchUserVoteEstimator(temperature=0.10, prior_blend=0.0, power=1.0)
         estimator.name = "observed_match_user_vote_t10"
         return estimator
     if model_key == "user_logreg":
+        from vocab_benchmark.estimators.online_user_logistic import OnlineUserLogisticEstimator
+
         estimator = OnlineUserLogisticEstimator(
             regularization_c=0.1,
             prior_blend=0.5,
@@ -318,6 +348,10 @@ def build_estimator(model_key: str, seed: int) -> Estimator:
         estimator.name = "online_user_logreg_c01_pb50"
         return estimator
     if model_key == "rasch_vote":
+        from vocab_benchmark.estimators.ensemble import WeightedAveragedEnsembleEstimator
+        from vocab_benchmark.estimators.irt import RaschIRTOnlineEstimator
+        from vocab_benchmark.estimators.observed_user_vote import ObservedMatchUserVoteEstimator
+
         rasch = RaschIRTOnlineEstimator(prior_var=25.0, lr=1.0, n_fit_steps=20)
         rasch.name = "rasch_highbudget_var25"
         vote = ObservedMatchUserVoteEstimator(temperature=0.10, prior_blend=0.0, power=1.0)
@@ -329,6 +363,11 @@ def build_estimator(model_key: str, seed: int) -> Estimator:
             logit_bias=0.0,
         )
     if model_key == "rasch_twopl_vote_user":
+        from vocab_benchmark.estimators.ensemble import WeightedAveragedEnsembleEstimator
+        from vocab_benchmark.estimators.irt import RaschIRTOnlineEstimator, TwoPLIRTOnlineEstimator
+        from vocab_benchmark.estimators.observed_user_vote import ObservedMatchUserVoteEstimator
+        from vocab_benchmark.estimators.online_user_logistic import OnlineUserLogisticEstimator
+
         rasch = RaschIRTOnlineEstimator(prior_var=25.0, lr=1.0, n_fit_steps=20)
         rasch.name = "rasch_highbudget_var25"
         twopl = TwoPLIRTOnlineEstimator(prior_var=25.0, lr=1.0, n_fit_steps=20)
@@ -349,10 +388,14 @@ def build_estimator(model_key: str, seed: int) -> Estimator:
             logit_bias=0.0,
         )
     if model_key == "svd":
+        from vocab_benchmark.estimators.svd import SVDRidgeUserEstimator
+
         estimator = SVDRidgeUserEstimator(rank=5, ridge=1.0, residual_scale=0.5, intercept_ridge=1.0)
         estimator.name = "svd_ridge_r5_l1_s05"
         return estimator
     if model_key == "fasttext_kernel":
+        from vocab_benchmark.estimators.fasttext_kernel import FastTextKernelLogisticConfig, FastTextKernelLogisticEstimator
+
         return FastTextKernelLogisticEstimator(
             FastTextKernelLogisticConfig(
                 embedding_dim=300,
@@ -365,6 +408,68 @@ def build_estimator(model_key: str, seed: int) -> Estimator:
                 user_rate_centering_weight=0.35,
             )
         )
+    if model_key == "grouped_irt":
+        from vocab_benchmark.estimators.irt import GroupedResidualIRTOnlineEstimator
+
+        estimator = GroupedResidualIRTOnlineEstimator(
+            prior_var=25.0,
+            lr=1.0,
+            n_fit_steps=20,
+            n_groups=16,
+            grouping_strategy="anchor_cosine",
+            group_temperature=0.10,
+            residual_prior_var=200.0,
+            embedding_dim=300,
+            random_state=seed,
+            kmeans_n_init=10,
+            pca_components=8,
+        )
+        estimator.name = "grouped_residual_irt_anchor_cosine_g16_t010_rp200"
+        return estimator
+    if model_key == "grouped_irt_twopl_hybrid":
+        from vocab_benchmark.estimators.ensemble import WeightedAveragedEnsembleEstimator
+        from vocab_benchmark.estimators.irt import GroupedResidualIRTOnlineEstimator, TwoPLIRTOnlineEstimator
+
+        grouped = GroupedResidualIRTOnlineEstimator(
+            prior_var=25.0,
+            lr=1.0,
+            n_fit_steps=20,
+            n_groups=16,
+            grouping_strategy="anchor_cosine",
+            group_temperature=0.10,
+            residual_prior_var=200.0,
+            embedding_dim=300,
+            random_state=seed,
+            kmeans_n_init=10,
+            pca_components=8,
+        )
+        grouped.name = "grouped_residual_irt_anchor_cosine_g16_t010_rp200"
+        twopl = TwoPLIRTOnlineEstimator(prior_var=25.0, lr=1.0, n_fit_steps=20)
+        twopl.name = "twopl_highbudget_var25"
+        return WeightedAveragedEnsembleEstimator(
+            members=[grouped, twopl],
+            weights=[0.60, 0.40],
+            name="grouped_residual_irt_anchor_cosine_g16_t010_rp200_twopl_hybrid_w60_40",
+            logit_bias=0.0,
+        )
+    if model_key == "best_grouped_irt_model":
+        from vocab_benchmark.estimators.irt import Response12GroupedResidualIRTEstimator
+
+        estimator = Response12GroupedResidualIRTEstimator(
+            tau_theta=2.0,
+            tau_delta=1.6,
+            gate_c=12.0,
+            n_groups=12,
+            random_state=seed,
+            threshold_min=0.10,
+            threshold_max=0.90,
+            threshold_step=0.005,
+            threshold_shrink_c=30.0,
+            accuracy_values=None,
+            use_accuracy_difficulty=True,
+        )
+        estimator.name = "response12_g12_tau1p6_c12p0_observed_ba_opt_shrunk"
+        return estimator
     raise ValueError(f"unknown model={model_key}")
 
 
@@ -414,6 +519,12 @@ def probability_cache_path(cache_dir: Path, model_key: str, data_fp: str, profil
 def state_cache_path(cache_dir: Path, model_key: str, data_fp: str, profile_name: str) -> Path:
     safe_profile = re.sub(r"[^A-Za-z0-9_.-]+", "_", profile_name.strip())
     return cache_dir / "states" / f"{model_key}_{data_fp}_{safe_profile}.pkl"
+
+
+def book_preprocess_cache_path(cache_dir: Path, data_fp: str, book_path: Path) -> Path:
+    key_payload = f"{BOOK_PREPROCESS_VERSION}|{data_fp}|{_file_signature(book_path)}|{str(book_path.resolve())}"
+    key = hashlib.sha1(key_payload.encode("utf-8")).hexdigest()
+    return cache_dir / "books" / f"{key}.pkl"
 
 
 def invalidate_probability_caches(cache_dir: Path, data_fp: str) -> int:
@@ -610,6 +721,12 @@ def load_full_model_context(data_dir: Path) -> tuple[pd.DataFrame, np.ndarray, p
     return words, x_words, response_frame
 
 
+def _stable_seed_from_text(text: str, base_seed: int) -> int:
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    value = int(digest[:16], 16)
+    return int(base_seed ^ (value & 0x7FFFFFFF))
+
+
 def build_query_words(response_frame: pd.DataFrame, sequence_len: int, seed: int) -> np.ndarray:
     users = sorted(response_frame["user_idx"].astype(int).unique().tolist())
     words = sorted(response_frame["word_idx"].astype(int).unique().tolist())
@@ -656,6 +773,70 @@ def build_query_words(response_frame: pd.DataFrame, sequence_len: int, seed: int
     return np.array(selected_words[:sequence_len], dtype=np.int32)
 
 
+def build_grouped_irt_semirandom_query_words(
+    response_frame: pd.DataFrame,
+    sequence_len: int,
+    seed: int,
+    user_key: str,
+    local_window: int,
+    swap_probability: float,
+    replace_probability: float,
+    replacement_pool_extra: int,
+) -> np.ndarray:
+    base = build_query_words(response_frame=response_frame, sequence_len=sequence_len, seed=seed)
+    if len(base) <= 1:
+        return base
+    local_window_clamped = max(1, int(local_window))
+    swap_probability_clamped = float(np.clip(swap_probability, 0.0, 1.0))
+    rng = np.random.default_rng(_stable_seed_from_text(text=user_key, base_seed=seed))
+    out = base.copy()
+    for i in range(len(out)):
+        if rng.random() >= swap_probability_clamped:
+            continue
+        max_j = min(len(out) - 1, i + local_window_clamped)
+        if max_j <= i:
+            continue
+        j = int(rng.integers(i + 1, max_j + 1))
+        tmp = int(out[i])
+        out[i] = out[j]
+        out[j] = tmp
+
+    replace_probability_clamped = float(np.clip(replace_probability, 0.0, 1.0))
+    replacement_pool_extra_clamped = max(0, int(replacement_pool_extra))
+    if replace_probability_clamped > 0.0 and replacement_pool_extra_clamped > 0:
+        users = sorted(response_frame["user_idx"].astype(int).unique().tolist())
+        words = sorted(response_frame["word_idx"].astype(int).unique().tolist())
+        user_to_row = {user_id: row_idx for row_idx, user_id in enumerate(users)}
+        word_to_col = {word_id: col_idx for col_idx, word_id in enumerate(words)}
+        label_matrix = np.full((len(users), len(words)), np.nan, dtype=np.float32)
+        for row in response_frame[["user_idx", "word_idx", "label"]].itertuples(index=False):
+            label_matrix[user_to_row[int(row.user_idx)], word_to_col[int(row.word_idx)]] = float(row.label)
+        valid = ~np.isnan(label_matrix)
+        coverage = valid.mean(axis=0)
+        means = np.divide(np.nansum(label_matrix, axis=0), np.maximum(valid.sum(axis=0), 1), dtype=np.float32)
+        centered = np.where(valid, label_matrix - means.reshape(1, -1), 0.0).astype(np.float32)
+        norms = np.linalg.norm(centered, axis=0)
+        variance = norms * norms / np.maximum(valid.sum(axis=0), 1)
+        entropy_proxy = 1.0 - np.abs(means - 0.5) * 2.0
+        base_score = variance * np.maximum(coverage, 1e-6) * np.maximum(entropy_proxy, 1e-6)
+        rank = np.argsort(-base_score)
+        pool_size = min(len(words), len(out) + replacement_pool_extra_clamped)
+        pool_words = np.array([int(words[col]) for col in rank[:pool_size].tolist()], dtype=np.int32)
+        selected_set = set(int(word_id) for word_id in out.tolist())
+        for i in range(len(out)):
+            if rng.random() >= replace_probability_clamped:
+                continue
+            candidates = [int(word_id) for word_id in pool_words.tolist() if int(word_id) not in selected_set]
+            if len(candidates) == 0:
+                break
+            replacement = int(candidates[int(rng.integers(0, len(candidates)))])
+            old_word_id = int(out[i])
+            out[i] = replacement
+            selected_set.remove(old_word_id)
+            selected_set.add(replacement)
+    return out
+
+
 def parse_answer_char(answer: str) -> int:
     value = answer.strip().lower()
     if value in {"y", "yes", "1", "k", "known"}:
@@ -666,9 +847,10 @@ def parse_answer_char(answer: str) -> int:
 
 
 def collect_answers_interactively(words: pd.DataFrame, query_word_idx: np.ndarray) -> np.ndarray:
+    quiz_size = int(len(query_word_idx))
     labels: list[int] = []
     print("Mark each word as known or unknown. Accepted answers: y/n, 1/0, known/unknown.\n")
-    print("=== 100-Word Vocabulary Test ===")
+    print(f"=== {quiz_size}-Word Vocabulary Test ===")
     for position, word_idx in enumerate(query_word_idx.tolist(), start=1):
         word = str(words.iloc[int(word_idx)]["word"])
         print(f"{position:3d}. {word}")
@@ -676,13 +858,160 @@ def collect_answers_interactively(words: pd.DataFrame, query_word_idx: np.ndarra
     for position, word_idx in enumerate(query_word_idx.tolist(), start=1):
         word = str(words.iloc[int(word_idx)]["word"])
         while True:
-            raw = input(f"{position:3d}/100  {word}: ").strip()
+            raw = input(f"{position:3d}/{quiz_size}  {word}: ").strip()
             try:
                 labels.append(parse_answer_char(raw))
                 break
             except ValueError as exc:
                 print(exc)
     return np.array(labels, dtype=np.int32)
+
+
+def _build_quiz_policy(strategy: str) -> "QueryPolicy":
+    from vocab_benchmark.query_policies import (
+        EntropyPolicy,
+        ExpectedEntropyReductionPolicy,
+        StagedAdaptivePolicy,
+        StochasticTopKEntropyPolicy,
+        UncertaintyPolicy,
+    )
+
+    if strategy == "adaptive_entropy":
+        return EntropyPolicy()
+    if strategy == "adaptive_uncertainty":
+        return UncertaintyPolicy()
+    if strategy == "adaptive_stochastic_entropy":
+        return StochasticTopKEntropyPolicy(top_k=3, temperature=0.03)
+    if strategy == "adaptive_eer_fast":
+        return ExpectedEntropyReductionPolicy(
+            candidate_pool_size=48,
+            eval_pool_size=96,
+            top_k_stochastic=1,
+            temperature=0.02,
+        )
+    if strategy == "adaptive_hybrid_fast":
+        # Cheap uncertainty early, then focused one-step lookahead.
+        return StagedAdaptivePolicy(
+            stages=[
+                (30, UncertaintyPolicy()),
+                (
+                    10_000,
+                    ExpectedEntropyReductionPolicy(
+                        candidate_pool_size=48,
+                        eval_pool_size=96,
+                        top_k_stochastic=1,
+                        temperature=0.02,
+                    ),
+                ),
+            ]
+        )
+    raise ValueError(f"unsupported adaptive quiz strategy={strategy}")
+
+
+def collect_answers_adaptive_interactively(
+    words: pd.DataFrame,
+    estimator: Estimator,
+    policy: QueryPolicy,
+    candidate_word_ids: np.ndarray,
+    quiz_size: int,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    labels: list[int] = []
+    selected_ids: list[int] = []
+    queried: set[int] = set()
+    state = estimator.initialize_user_state()
+    rng = np.random.default_rng(seed)
+    print("Adaptive quiz mode: next word is chosen from current uncertainty/information gain.")
+    print("Mark each word as known or unknown. Accepted answers: y/n, 1/0, known/unknown.\n")
+    print(f"=== Adaptive {quiz_size}-Word Vocabulary Test ===")
+    for position in range(1, quiz_size + 1):
+        pick = policy.select_next_queries(
+            estimator=estimator,
+            user_state=state,
+            candidate_word_ids=candidate_word_ids,
+            already_queried_word_ids=queried,
+            batch_size=1,
+            rng=rng,
+        )
+        if len(pick) == 0:
+            remaining = [int(word_id) for word_id in candidate_word_ids.tolist() if int(word_id) not in queried]
+            if len(remaining) == 0:
+                break
+            word_idx = int(remaining[0])
+        else:
+            word_idx = int(pick[0])
+        if word_idx in queried:
+            remaining = [int(word_id) for word_id in candidate_word_ids.tolist() if int(word_id) not in queried]
+            if len(remaining) == 0:
+                break
+            word_idx = int(remaining[0])
+        word = str(words.iloc[word_idx]["word"])
+        while True:
+            raw = input(f"{position:3d}/{quiz_size}  {word}: ").strip()
+            try:
+                label = parse_answer_char(raw)
+                break
+            except ValueError as exc:
+                print(exc)
+        queried.add(word_idx)
+        selected_ids.append(word_idx)
+        labels.append(label)
+        state = estimator.update_user_state(
+            state,
+            np.array([word_idx], dtype=np.int32),
+            np.array([label], dtype=np.float32),
+        )
+    return np.array(selected_ids, dtype=np.int32), np.array(labels, dtype=np.int32)
+
+
+def collect_answers_adaptive_from_string(
+    answer_string: str,
+    estimator: Estimator,
+    policy: QueryPolicy,
+    candidate_word_ids: np.ndarray,
+    expected_len: int,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    compact = re.sub(r"[\s,;|]+", "", answer_string)
+    if len(compact) != expected_len:
+        raise ValueError(
+            f"answer-string must contain exactly {expected_len} answers after removing separators; got {len(compact)}"
+        )
+    parsed_labels = np.array([parse_answer_char(ch) for ch in compact], dtype=np.int32)
+    selected_ids: list[int] = []
+    queried: set[int] = set()
+    state = estimator.initialize_user_state()
+    rng = np.random.default_rng(seed)
+    for i in range(expected_len):
+        pick = policy.select_next_queries(
+            estimator=estimator,
+            user_state=state,
+            candidate_word_ids=candidate_word_ids,
+            already_queried_word_ids=queried,
+            batch_size=1,
+            rng=rng,
+        )
+        if len(pick) == 0:
+            remaining = [int(word_id) for word_id in candidate_word_ids.tolist() if int(word_id) not in queried]
+            if len(remaining) == 0:
+                break
+            word_idx = int(remaining[0])
+        else:
+            word_idx = int(pick[0])
+        if word_idx in queried:
+            remaining = [int(word_id) for word_id in candidate_word_ids.tolist() if int(word_id) not in queried]
+            if len(remaining) == 0:
+                break
+            word_idx = int(remaining[0])
+        label = int(parsed_labels[i])
+        queried.add(word_idx)
+        selected_ids.append(word_idx)
+        state = estimator.update_user_state(
+            state,
+            np.array([word_idx], dtype=np.int32),
+            np.array([label], dtype=np.float32),
+        )
+    return np.array(selected_ids, dtype=np.int32), parsed_labels[: len(selected_ids)]
 
 
 def collect_answers_from_string(answer_string: str, expected_len: int) -> np.ndarray:
@@ -756,13 +1085,15 @@ def deduplicate_entries_preserving_input_order(entries: list[tuple[int, int]]) -
 
 
 def parse_query_words(query_words: str, lower_to_idx: dict[str, int]) -> list[str]:
-    out: list[str] = []
+    normalized_parts: list[str] = []
     for part in query_words.split(","):
         normalized = normalize_word(part)
         if normalized == "":
             continue
-        out.append(pick_contextual_lemma(normalized, None, None, lower_to_idx))
-    return out
+        normalized_parts.append(normalized)
+    if len(normalized_parts) == 0:
+        return []
+    return contextual_deinflect_tokens(normalized_parts, lower_to_idx)
 
 
 def apply_additional_entries(
@@ -867,6 +1198,51 @@ def split_sentences(text: str) -> list[str]:
     return [match.group(0).strip() for match in SENTENCE_RE.finditer(text) if match.group(0).strip()]
 
 
+def preprocess_book_sentences(text: str, lower_to_idx: dict[str, int]) -> list[SentenceTokens]:
+    rows: list[SentenceTokens] = []
+    for sentence in split_sentences(text):
+        raw_tokens = [match.group(0) for match in WORD_RE.finditer(sentence)]
+        normalized_tokens = contextual_deinflect_tokens(raw_tokens, lower_to_idx)
+        rows.append(
+            SentenceTokens(
+                sentence=sentence,
+                normalized_tokens=normalized_tokens,
+                raw_token_count=len(raw_tokens),
+            )
+        )
+    return rows
+
+
+def load_or_prepare_book_preprocessed(
+    path: Path,
+    lower_to_idx: dict[str, int],
+    cache_dir: Path,
+    data_fp: str,
+    disable_cache: bool,
+) -> tuple[list[BookToken], list[SentenceTokens]]:
+    cache_path = book_preprocess_cache_path(cache_dir=cache_dir, data_fp=data_fp, book_path=path)
+    if not disable_cache and cache_path.exists():
+        with cache_path.open("rb") as f:
+            payload = pickle.load(f)
+        tokens = payload.get("tokens")
+        sentence_tokens = payload.get("sentence_tokens")
+        if isinstance(tokens, list) and isinstance(sentence_tokens, list):
+            return tokens, sentence_tokens
+
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    tokens = tokenize_book(text, lower_to_idx)
+    sentence_tokens = preprocess_book_sentences(text, lower_to_idx)
+    if not disable_cache:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        with cache_path.open("wb") as f:
+            pickle.dump(
+                {"tokens": tokens, "sentence_tokens": sentence_tokens},
+                f,
+                protocol=pickle.HIGHEST_PROTOCOL,
+            )
+    return tokens, sentence_tokens
+
+
 def predict_for_book_words(probs_all_words: np.ndarray, word_indices: np.ndarray) -> dict[int, float]:
     if len(word_indices) == 0:
         return {}
@@ -881,9 +1257,17 @@ def analyze_book(
     probs_all_words: np.ndarray,
     threshold: float,
     seed: int,
+    cache_dir: Path,
+    data_fp: str,
+    disable_cache: bool,
 ) -> BookAnalysis:
-    text = path.read_text(encoding="utf-8", errors="ignore")
-    tokens = tokenize_book(text, lower_to_idx)
+    tokens, sentence_tokens = load_or_prepare_book_preprocessed(
+        path=path,
+        lower_to_idx=lower_to_idx,
+        cache_dir=cache_dir,
+        data_fp=data_fp,
+        disable_cache=disable_cache,
+    )
     token_counts: dict[str, int] = {}
     word_to_idx: dict[str, int] = {}
     oov_token_count = 0
@@ -916,7 +1300,14 @@ def analyze_book(
     sampled_known = sample_rows(known_rows, 25, rng)
     sampled_unknown = sample_rows(unknown_rows, 25, rng)
     sampled_oov = sample_oov_rows(oov_type_counts, 25, rng)
-    sentence_rows = find_one_unknown_sentences(text, lower_to_idx, idx_to_word, probabilities, threshold, seed)
+    sentence_rows = find_one_unknown_sentences(
+        sentence_tokens=sentence_tokens,
+        lower_to_idx=lower_to_idx,
+        idx_to_word=idx_to_word,
+        probabilities=probabilities,
+        threshold=threshold,
+        seed=seed,
+    )
     return BookAnalysis(
         path=path,
         token_count=len(tokens),
@@ -949,7 +1340,7 @@ def sample_oov_rows(oov_type_counts: dict[str, int], sample_size: int, rng: np.r
 
 
 def find_one_unknown_sentences(
-    text: str,
+    sentence_tokens: list[SentenceTokens],
     lower_to_idx: dict[str, int],
     idx_to_word: dict[int, str],
     probabilities: dict[int, float],
@@ -957,14 +1348,12 @@ def find_one_unknown_sentences(
     seed: int,
 ) -> list[tuple[str, str, float]]:
     candidates: list[tuple[str, str, float]] = []
-    for sentence in split_sentences(text):
-        raw_tokens = [match.group(0) for match in WORD_RE.finditer(sentence)]
-        normalized_tokens = contextual_deinflect_tokens(raw_tokens, lower_to_idx)
-        if len(raw_tokens) < 4 or len(raw_tokens) > 35:
+    for row in sentence_tokens:
+        if row.raw_token_count < 4 or row.raw_token_count > 35:
             continue
         unknown_words: list[tuple[str, float]] = []
         has_oov = False
-        for normalized in normalized_tokens:
+        for normalized in row.normalized_tokens:
             word_idx = lower_to_idx.get(normalized)
             if word_idx is None or int(word_idx) not in probabilities:
                 has_oov = True
@@ -973,7 +1362,7 @@ def find_one_unknown_sentences(
             if probability < threshold:
                 unknown_words.append((idx_to_word[int(word_idx)], probability))
         if not has_oov and len(unknown_words) == 1:
-            candidates.append((sentence, unknown_words[0][0], unknown_words[0][1]))
+            candidates.append((row.sentence, unknown_words[0][0], unknown_words[0][1]))
     rng = np.random.default_rng(seed + 1009)
     if len(candidates) <= 10:
         return candidates
@@ -1032,15 +1421,14 @@ def build_last_observed_map(observed_word_ids: np.ndarray, observed_labels: np.n
 
 def find_query_word_sentences(
     query_word: str,
-    book_text: str,
+    sentence_tokens: list[SentenceTokens],
     lower_to_idx: dict[str, int],
     probs_all_words: np.ndarray,
     threshold: float,
 ) -> list[SentenceQueryMatch]:
     rows: list[SentenceQueryMatch] = []
-    for sentence in split_sentences(book_text):
-        raw_tokens = [match.group(0) for match in WORD_RE.finditer(sentence)]
-        normalized_tokens = contextual_deinflect_tokens(raw_tokens, lower_to_idx)
+    for sentence_row in sentence_tokens:
+        normalized_tokens = sentence_row.normalized_tokens
         if query_word not in normalized_tokens:
             continue
         unknown_items: list[tuple[str, float]] = []
@@ -1057,7 +1445,7 @@ def find_query_word_sentences(
                     seen_unknown.add(token)
             else:
                 known_count += 1
-        rows.append(SentenceQueryMatch(sentence=sentence, unknown_items=unknown_items, known_token_count=known_count))
+        rows.append(SentenceQueryMatch(sentence=sentence_row.sentence, unknown_items=unknown_items, known_token_count=known_count))
     rows.sort(key=lambda row: (len(row.unknown_items), -row.known_token_count, row.sentence))
     return rows
 
@@ -1070,14 +1458,11 @@ def print_query_word_report(
     observed_word_ids: np.ndarray,
     observed_labels: np.ndarray,
     threshold: float,
-    book_path: Path | None,
+    sentence_tokens: list[SentenceTokens] | None,
 ) -> None:
     if len(query_words) == 0:
         return
     observed_map = build_last_observed_map(observed_word_ids, observed_labels)
-    book_text: str | None = None
-    if book_path is not None:
-        book_text = book_path.read_text(encoding="utf-8", errors="ignore")
     print("\n=== Query Words ===")
     for word in query_words:
         print(f"\nWord: {word}")
@@ -1095,10 +1480,10 @@ def print_query_word_report(
             print(f"  Observed before: yes (last observed state={observed_text}, observation_index={observed_pos})")
         else:
             print("  Observed before: no")
-        if book_text is not None:
+        if sentence_tokens is not None:
             rows = find_query_word_sentences(
                 query_word=word,
-                book_text=book_text,
+                sentence_tokens=sentence_tokens,
                 lower_to_idx=lower_to_idx,
                 probs_all_words=probs_all_words,
                 threshold=threshold,
@@ -1123,6 +1508,8 @@ def main() -> None:
         raise ValueError("--profile is required unless --list-models is used")
     if args.known_threshold <= 0.0 or args.known_threshold >= 1.0:
         raise ValueError("known-threshold must be between 0 and 1")
+    if args.quiz_size <= 0:
+        raise ValueError("quiz-size must be positive")
 
     data_fp = dataset_fingerprint(args.data_dir)
     words, word_index, lower_to_idx, idx_to_word = load_word_context(args.data_dir)
@@ -1133,14 +1520,68 @@ def main() -> None:
         print(f"Loaded profile: {path} ({len(observed_labels)} answers, created_at={payload.get('created_at')})")
     else:
         _words_full, _x_words, response_frame = load_full_model_context(args.data_dir)
-        query_word_idx = build_query_words(response_frame, 100, args.seed)
-        if len(query_word_idx) < 100:
-            raise ValueError(f"query sequence produced only {len(query_word_idx)} words")
-        if args.answer_string is None:
-            observed_labels = collect_answers_interactively(words, query_word_idx)
+        requested_strategy = str(args.quiz_strategy)
+        effective_strategy = requested_strategy
+        if requested_strategy == "auto":
+            effective_strategy = "adaptive_uncertainty" if args.model == "best_grouped_irt_model" else "static"
+
+        if effective_strategy.startswith("adaptive_"):
+            print(f"Using adaptive quiz strategy: {effective_strategy}")
+            estimator_for_quiz = load_or_fit_estimator(
+                model_key=args.model,
+                seed=args.seed,
+                response_frame=response_frame,
+                x_words=_x_words,
+                cache_dir=args.cache_dir,
+                data_fp=data_fp,
+                disable_cache=args.disable_cache,
+            )
+            candidate_word_ids = np.array(sorted(response_frame["word_idx"].astype(int).unique().tolist()), dtype=np.int32)
+            if len(candidate_word_ids) < args.quiz_size:
+                raise ValueError(
+                    f"adaptive candidate pool has only {len(candidate_word_ids)} words; quiz-size={args.quiz_size}"
+                )
+            policy = _build_quiz_policy(effective_strategy)
+            if args.answer_string is None:
+                observed_word_ids, observed_labels = collect_answers_adaptive_interactively(
+                    words=words,
+                    estimator=estimator_for_quiz,
+                    policy=policy,
+                    candidate_word_ids=candidate_word_ids,
+                    quiz_size=args.quiz_size,
+                    seed=args.seed,
+                )
+            else:
+                observed_word_ids, observed_labels = collect_answers_adaptive_from_string(
+                    answer_string=args.answer_string,
+                    estimator=estimator_for_quiz,
+                    policy=policy,
+                    candidate_word_ids=candidate_word_ids,
+                    expected_len=args.quiz_size,
+                    seed=args.seed,
+                )
         else:
-            observed_labels = collect_answers_from_string(args.answer_string, 100)
-        observed_word_ids = query_word_idx.astype(np.int32)
+            if effective_strategy == "semirandom" and args.model == "best_grouped_irt_model":
+                print("Using semi-random grouped-IRT quiz initialization.")
+                query_word_idx = build_grouped_irt_semirandom_query_words(
+                    response_frame=response_frame,
+                    sequence_len=args.quiz_size,
+                    seed=args.seed,
+                    user_key=args.profile,
+                    local_window=3,
+                    swap_probability=0.05,
+                    replace_probability=0.01,
+                    replacement_pool_extra=30,
+                )
+            else:
+                query_word_idx = build_query_words(response_frame, args.quiz_size, args.seed)
+            if len(query_word_idx) < args.quiz_size:
+                raise ValueError(f"query sequence produced only {len(query_word_idx)} words")
+            if args.answer_string is None:
+                observed_labels = collect_answers_interactively(words, query_word_idx)
+            else:
+                observed_labels = collect_answers_from_string(args.answer_string, args.quiz_size)
+            observed_word_ids = query_word_idx.astype(np.int32)
         save_profile(path, args.profile, words, observed_word_ids, observed_labels)
         print(f"Saved profile: {path}")
         profile_changed = True
@@ -1210,6 +1651,7 @@ def main() -> None:
     query_words = parse_query_words(args.query_words, lower_to_idx) if args.query_words is not None else []
 
     book_path: Path | None = None
+    query_sentence_tokens: list[SentenceTokens] | None = None
     if args.book is not None:
         book_path = select_book(args.data_dir / "example_texts", args.book)
         if len(query_words) == 0:
@@ -1220,8 +1662,19 @@ def main() -> None:
                 probs_all_words=probs_all_words,
                 threshold=args.known_threshold,
                 seed=args.seed,
+                cache_dir=args.cache_dir,
+                data_fp=data_fp,
+                disable_cache=args.disable_cache,
             )
             print_analysis(analysis)
+        else:
+            _tokens, query_sentence_tokens = load_or_prepare_book_preprocessed(
+                path=book_path,
+                lower_to_idx=lower_to_idx,
+                cache_dir=args.cache_dir,
+                data_fp=data_fp,
+                disable_cache=args.disable_cache,
+            )
     if len(query_words) > 0:
         print_query_word_report(
             query_words=query_words,
@@ -1231,7 +1684,7 @@ def main() -> None:
             observed_word_ids=observed_word_ids,
             observed_labels=observed_labels,
             threshold=args.known_threshold,
-            book_path=book_path,
+            sentence_tokens=query_sentence_tokens,
         )
 
 
