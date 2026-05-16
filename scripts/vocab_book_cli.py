@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 WORD_RE = re.compile(r"[A-Za-z]+(?:['\u2019][A-Za-z]+)?")
 SENTENCE_RE = re.compile(r"[^.!?]+[.!?]+|[^.!?]+$")
 PROFILE_VERSION = 1
-BOOK_PREPROCESS_VERSION = 2
+BOOK_PREPROCESS_VERSION = 3
 MODEL_NAME = "budget_adaptive_refined_raw_switch500"
 DEFAULT_MODEL_KEY = "best_adaptive"
 MODEL_HELP: dict[str, str] = {
@@ -56,6 +56,7 @@ class BookToken:
     raw: str
     normalized: str
     word_idx: int | None
+    is_proper_noun: bool
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,7 @@ class BookAnalysis:
     path: Path
     token_count: int
     type_count: int
+    proper_noun_excluded_token_count: int
     in_vocab_token_count: int
     oov_token_count: int
     expected_unknown_token_count: int
@@ -70,6 +72,7 @@ class BookAnalysis:
     known_words: list[tuple[str, float, int]]
     unknown_words: list[tuple[str, float, int]]
     oov_words: list[tuple[str, int]]
+    detected_names: list[tuple[str, int]]
     one_unknown_sentences: list[tuple[str, str, float]]
 
 
@@ -87,18 +90,135 @@ class SentenceTokens:
     raw_token_count: int
 
 
-PTB_TO_WORDNET_POS: dict[str, str] = {
-    "J": "a",
-    "V": "v",
-    "N": "n",
-    "R": "r",
+PTB_TO_UPOS: dict[str, str] = {
+    "J": "ADJ",
+    "V": "VERB",
+    "N": "NOUN",
+    "R": "ADV",
+}
+PROPER_NOUN_TAGS: set[str] = {"NNP", "NNPS"}
+NAME_LIKE_TOKEN_RE = re.compile(r"^[A-Z][A-Za-z]*(?:['\u2019-][A-Za-z]+)*$")
+TITLE_CASE_NOISE_TOKENS: set[str] = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "been",
+    "being",
+    "but",
+    "by",
+    "did",
+    "do",
+    "does",
+    "first",
+    "for",
+    "from",
+    "had",
+    "has",
+    "have",
+    "he",
+    "her",
+    "here",
+    "him",
+    "his",
+    "how",
+    "however",
+    "i",
+    "if",
+    "in",
+    "is",
+    "it",
+    "its",
+    "me",
+    "my",
+    "no",
+    "not",
+    "of",
+    "oh",
+    "on",
+    "or",
+    "our",
+    "she",
+    "so",
+    "that",
+    "the",
+    "their",
+    "them",
+    "then",
+    "there",
+    "these",
+    "they",
+    "this",
+    "those",
+    "to",
+    "was",
+    "we",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "why",
+    "will",
+    "with",
+    "you",
+    "your",
+}
+CALENDAR_WORD_EXCLUSIONS: set[str] = {
+    # Weekdays
+    "monday",
+    "mon",
+    "tuesday",
+    "tue",
+    "tues",
+    "wednesday",
+    "wed",
+    "thursday",
+    "thu",
+    "thur",
+    "thurs",
+    "friday",
+    "fri",
+    "saturday",
+    "sat",
+    "sunday",
+    "sun",
+    # Months
+    "january",
+    "jan",
+    "february",
+    "feb",
+    "march",
+    "mar",
+    "april",
+    "apr",
+    "may",
+    "june",
+    "jun",
+    "july",
+    "jul",
+    "august",
+    "aug",
+    "september",
+    "sep",
+    "sept",
+    "october",
+    "oct",
+    "november",
+    "nov",
+    "december",
+    "dec",
 }
 
 
 @lru_cache(maxsize=1)
-def _load_nltk_lemmatizer() -> Any:
+def _load_contextual_deinflection_libs() -> tuple[Any, Any]:
     import nltk
-    from nltk.stem import WordNetLemmatizer
+    import lemminflect
 
     def ensure_resource(resource_path: str, package_name: str) -> None:
         candidates = (resource_path, f"{resource_path}.zip")
@@ -123,33 +243,152 @@ def _load_nltk_lemmatizer() -> Any:
         ensure_resource("taggers/averaged_perceptron_tagger_eng", "averaged_perceptron_tagger_eng")
     except LookupError:
         ensure_resource("taggers/averaged_perceptron_tagger", "averaged_perceptron_tagger")
-    ensure_resource("corpora/wordnet", "wordnet")
-    ensure_resource("corpora/omw-1.4", "omw-1.4")
-    return nltk, WordNetLemmatizer()
+    return nltk, lemminflect
 
 
-def _wordnet_pos_from_ptb(tag: str) -> str:
+def _upos_from_ptb(tag: str) -> str:
     if len(tag) == 0:
-        return "n"
-    return PTB_TO_WORDNET_POS.get(tag[0], "n")
+        return "NOUN"
+    return PTB_TO_UPOS.get(tag[0], "NOUN")
+
+
+def _ordered_unique(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return out
+
+
+def _deinflect_token_with_pos(token: str, ptb_tag: str, lemminflect_lib: Any) -> list[str]:
+    upos = _upos_from_ptb(ptb_tag)
+    candidates: list[str] = []
+    by_u = lemminflect_lib.getAllLemmas(token, upos=upos)
+    for lemma in by_u.get(upos, ()):
+        candidates.append(normalize_word(str(lemma)))
+    by_any = lemminflect_lib.getAllLemmas(token)
+    for mapped_upos in ("VERB", "AUX", "NOUN", "ADJ", "ADV", "PROPN"):
+        for lemma in by_any.get(mapped_upos, ()):
+            candidates.append(normalize_word(str(lemma)))
+    candidates.append(normalize_word(token))
+    return [candidate for candidate in _ordered_unique(candidates) if candidate]
+
+
+def _is_proper_noun_tag(ptb_tag: str) -> bool:
+    return ptb_tag in PROPER_NOUN_TAGS
+
+
+def _is_name_like_token(raw_token: str) -> bool:
+    if raw_token == "":
+        return False
+    if raw_token.isupper():
+        return False
+    if NAME_LIKE_TOKEN_RE.fullmatch(raw_token) is None:
+        return False
+    normalized = normalize_word(raw_token).strip("'")
+    if normalized in CALENDAR_WORD_EXCLUSIONS:
+        return False
+    if normalized in TITLE_CASE_NOISE_TOKENS:
+        return False
+    return True
+
+
+def _build_high_confidence_proper_noun_lexicon(
+    tagged_sentences: list[list[tuple[str, str]]],
+) -> set[str]:
+    stats: dict[str, dict[str, int]] = {}
+    for tagged_sentence in tagged_sentences:
+        for token_pos, (raw_token, ptb_tag) in enumerate(tagged_sentence):
+            normalized = normalize_word(raw_token)
+            if normalized == "":
+                continue
+            row = stats.get(normalized)
+            if row is None:
+                row = {
+                    "total": 0,
+                    "proper": 0,
+                    "sentence_initial_proper": 0,
+                    "lowercase_seen": 0,
+                    "name_like_proper": 0,
+                }
+                stats[normalized] = row
+            row["total"] += 1
+            if raw_token[:1].islower():
+                row["lowercase_seen"] += 1
+            if _is_proper_noun_tag(ptb_tag):
+                row["proper"] += 1
+                if token_pos == 0:
+                    row["sentence_initial_proper"] += 1
+                if _is_name_like_token(raw_token):
+                    row["name_like_proper"] += 1
+
+    out: set[str] = set()
+    for normalized, row in stats.items():
+        if normalized in CALENDAR_WORD_EXCLUSIONS:
+            continue
+        proper = row["proper"]
+        total = row["total"]
+        sentence_initial_proper = row["sentence_initial_proper"]
+        lowercase_seen = row["lowercase_seen"]
+        name_like_proper = row["name_like_proper"]
+        if proper < 2:
+            continue
+        if total <= 0:
+            continue
+        proper_ratio = float(proper) / float(total)
+        if proper_ratio < 0.60:
+            continue
+        if name_like_proper < 2:
+            continue
+        if lowercase_seen > 0:
+            continue
+        # Drop title-case noise: words tagged proper almost only at sentence start.
+        if sentence_initial_proper == proper and proper < 5:
+            continue
+        out.add(normalized)
+    return out
+
+
+def contextual_deinflect_tokens_with_proper_flags(
+    raw_tokens: list[str],
+    lower_to_idx: dict[str, int],
+    exclude_proper_nouns: bool,
+    proper_noun_lexicon: set[str] | None = None,
+) -> tuple[list[str], list[bool]]:
+    normalized = [normalize_word(token) for token in raw_tokens]
+    if len(normalized) == 0:
+        return [], []
+    nltk, lemminflect_lib = _load_contextual_deinflection_libs()
+    tagged = nltk.pos_tag(raw_tokens, lang="eng")
+    out_tokens: list[str] = []
+    out_flags: list[bool] = []
+    for raw_token, ptb_tag in tagged:
+        token = normalize_word(raw_token)
+        if proper_noun_lexicon is None:
+            is_proper_noun = _is_proper_noun_tag(ptb_tag)
+        else:
+            is_proper_noun = token in proper_noun_lexicon and _is_proper_noun_tag(ptb_tag)
+        out_flags.append(is_proper_noun)
+        if is_proper_noun and exclude_proper_nouns:
+            out_tokens.append("")
+            continue
+        candidates = _deinflect_token_with_pos(token=token, ptb_tag=ptb_tag, lemminflect_lib=lemminflect_lib)
+        selected = next((candidate for candidate in candidates if candidate in lower_to_idx), None)
+        if selected is None:
+            selected = candidates[0] if len(candidates) > 0 else token
+        out_tokens.append(selected)
+    return out_tokens, out_flags
 
 
 def contextual_deinflect_tokens(raw_tokens: list[str], lower_to_idx: dict[str, int]) -> list[str]:
-    normalized = [normalize_word(token) for token in raw_tokens]
-    if len(normalized) == 0:
-        return []
-    nltk, lemmatizer = _load_nltk_lemmatizer()
-    tagged = nltk.pos_tag(normalized, lang="eng")
-    out: list[str] = []
-    for token, tag in tagged:
-        lemma = normalize_word(lemmatizer.lemmatize(token, _wordnet_pos_from_ptb(tag)))
-        if lemma in lower_to_idx:
-            out.append(lemma)
-            continue
-        if token in lower_to_idx:
-            out.append(token)
-            continue
-        out.append(lemma if lemma else token)
+    out, _ = contextual_deinflect_tokens_with_proper_flags(
+        raw_tokens=raw_tokens,
+        lower_to_idx=lower_to_idx,
+        exclude_proper_nouns=False,
+    )
     return out
 
 
@@ -923,7 +1162,14 @@ def parse_additional_entries(
         if "=" not in part:
             raise ValueError(f"invalid add-words entry: {part!r}; expected word=label")
         word_raw, label_raw = part.split("=", 1)
-        normalized = normalize_word(word_raw.strip())
+        normalized_candidates, proper_flags = contextual_deinflect_tokens_with_proper_flags(
+            [word_raw.strip()],
+            lower_to_idx,
+            exclude_proper_nouns=True,
+        )
+        if len(proper_flags) > 0 and proper_flags[0]:
+            raise ValueError(f"proper noun is excluded from analysis and cannot be added: {word_raw.strip()!r}")
+        normalized = normalized_candidates[0] if len(normalized_candidates) > 0 else normalize_word(word_raw.strip())
         if normalized not in lower_to_idx:
             raise ValueError(f"word not in model vocabulary: {word_raw.strip()!r}")
         word_idx = int(lower_to_idx[normalized])
@@ -943,7 +1189,15 @@ def collect_additional_entries_interactively(
         raw_word = input("word: ").strip()
         if raw_word == "":
             break
-        normalized = normalize_word(raw_word)
+        normalized_candidates, proper_flags = contextual_deinflect_tokens_with_proper_flags(
+            [raw_word],
+            lower_to_idx,
+            exclude_proper_nouns=True,
+        )
+        if len(proper_flags) > 0 and proper_flags[0]:
+            print(f"Word {raw_word!r} is treated as a proper noun and excluded from analysis.")
+            continue
+        normalized = normalized_candidates[0] if len(normalized_candidates) > 0 else normalize_word(raw_word)
         if normalized not in lower_to_idx:
             print(f"Word {raw_word!r} is not in model vocabulary. Try another word.")
             continue
@@ -974,15 +1228,26 @@ def deduplicate_entries_preserving_input_order(entries: list[tuple[int, int]]) -
 
 
 def parse_query_words(query_words: str, lower_to_idx: dict[str, int]) -> list[str]:
-    normalized_parts: list[str] = []
+    raw_parts: list[str] = []
     for part in query_words.split(","):
         normalized = normalize_word(part)
         if normalized == "":
             continue
-        normalized_parts.append(normalized)
-    if len(normalized_parts) == 0:
+        raw_parts.append(part.strip())
+    if len(raw_parts) == 0:
         return []
-    return contextual_deinflect_tokens(normalized_parts, lower_to_idx)
+    normalized_tokens, proper_flags = contextual_deinflect_tokens_with_proper_flags(
+        raw_parts,
+        lower_to_idx,
+        exclude_proper_nouns=True,
+    )
+    out: list[str] = []
+    for token, is_proper_noun in zip(normalized_tokens, proper_flags):
+        if is_proper_noun:
+            continue
+        if token != "":
+            out.append(token)
+    return out
 
 
 def apply_additional_entries(
@@ -1074,32 +1339,54 @@ def select_book(example_dir: Path, requested: str | None) -> Path:
         print(f"Enter a number from 1 to {len(books)}.")
 
 
-def tokenize_book(text: str, lower_to_idx: dict[str, int]) -> list[BookToken]:
-    raw_tokens = [match.group(0) for match in WORD_RE.finditer(text)]
-    normalized_tokens = contextual_deinflect_tokens(raw_tokens, lower_to_idx)
-    tokens: list[BookToken] = []
-    for raw, normalized in zip(raw_tokens, normalized_tokens):
-        tokens.append(BookToken(raw=raw, normalized=normalized, word_idx=lower_to_idx.get(normalized)))
-    return tokens
-
-
 def split_sentences(text: str) -> list[str]:
     return [match.group(0).strip() for match in SENTENCE_RE.finditer(text) if match.group(0).strip()]
 
 
-def preprocess_book_sentences(text: str, lower_to_idx: dict[str, int]) -> list[SentenceTokens]:
-    rows: list[SentenceTokens] = []
-    for sentence in split_sentences(text):
-        raw_tokens = [match.group(0) for match in WORD_RE.finditer(sentence)]
-        normalized_tokens = contextual_deinflect_tokens(raw_tokens, lower_to_idx)
-        rows.append(
+def preprocess_book_text(text: str, lower_to_idx: dict[str, int]) -> tuple[list[BookToken], list[SentenceTokens]]:
+    sentences = split_sentences(text)
+    sentence_raw_tokens: list[list[str]] = []
+    for sentence in sentences:
+        sentence_raw_tokens.append([match.group(0) for match in WORD_RE.finditer(sentence)])
+
+    nltk, _ = _load_contextual_deinflection_libs()
+    tagged_sentences = nltk.pos_tag_sents(sentence_raw_tokens, lang="eng")
+    proper_noun_lexicon = _build_high_confidence_proper_noun_lexicon(tagged_sentences=tagged_sentences)
+
+    all_tokens: list[BookToken] = []
+    sentence_tokens_rows: list[SentenceTokens] = []
+    for sentence, raw_tokens in zip(sentences, sentence_raw_tokens):
+        if len(raw_tokens) == 0:
+            sentence_tokens_rows.append(
+                SentenceTokens(
+                    sentence=sentence,
+                    normalized_tokens=[],
+                    raw_token_count=0,
+                )
+            )
+            continue
+        normalized_tokens, proper_flags = contextual_deinflect_tokens_with_proper_flags(
+            raw_tokens=raw_tokens,
+            lower_to_idx=lower_to_idx,
+            exclude_proper_nouns=True,
+            proper_noun_lexicon=proper_noun_lexicon,
+        )
+        filtered_sentence_tokens: list[str] = []
+        for raw, normalized, is_proper_noun in zip(raw_tokens, normalized_tokens, proper_flags):
+            if is_proper_noun:
+                all_tokens.append(BookToken(raw=raw, normalized="", word_idx=None, is_proper_noun=True))
+                continue
+            all_tokens.append(BookToken(raw=raw, normalized=normalized, word_idx=lower_to_idx.get(normalized), is_proper_noun=False))
+            if normalized != "":
+                filtered_sentence_tokens.append(normalized)
+        sentence_tokens_rows.append(
             SentenceTokens(
                 sentence=sentence,
-                normalized_tokens=normalized_tokens,
+                normalized_tokens=filtered_sentence_tokens,
                 raw_token_count=len(raw_tokens),
             )
         )
-    return rows
+    return all_tokens, sentence_tokens_rows
 
 
 def load_or_prepare_book_preprocessed(
@@ -1119,8 +1406,7 @@ def load_or_prepare_book_preprocessed(
             return tokens, sentence_tokens
 
     text = path.read_text(encoding="utf-8", errors="ignore")
-    tokens = tokenize_book(text, lower_to_idx)
-    sentence_tokens = preprocess_book_sentences(text, lower_to_idx)
+    tokens, sentence_tokens = preprocess_book_text(text, lower_to_idx)
     if not disable_cache:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         with cache_path.open("wb") as f:
@@ -1160,8 +1446,21 @@ def analyze_book(
     token_counts: dict[str, int] = {}
     word_to_idx: dict[str, int] = {}
     oov_token_count = 0
+    proper_noun_excluded_token_count = 0
     oov_type_counts: dict[str, int] = {}
+    name_type_counts: dict[str, int] = {}
+    name_display_by_norm: dict[str, str] = {}
     for token in tokens:
+        if token.is_proper_noun:
+            proper_noun_excluded_token_count += 1
+            normalized_name = normalize_word(token.raw)
+            if normalized_name != "":
+                name_type_counts[normalized_name] = name_type_counts.get(normalized_name, 0) + 1
+                if normalized_name not in name_display_by_norm:
+                    name_display_by_norm[normalized_name] = token.raw
+            continue
+        if token.normalized == "":
+            continue
         token_counts[token.normalized] = token_counts.get(token.normalized, 0) + 1
         if token.word_idx is None:
             oov_token_count += 1
@@ -1189,6 +1488,11 @@ def analyze_book(
     sampled_known = sample_rows(known_rows, 25, rng)
     sampled_unknown = sample_rows(unknown_rows, 25, rng)
     sampled_oov = sample_oov_rows(oov_type_counts, 25, rng)
+    name_rows = sorted(
+        [(name_display_by_norm[norm_name], count) for norm_name, count in name_type_counts.items()],
+        key=lambda item: item[0].lower(),
+    )
+    sampled_names = sample_oov_rows(dict(name_rows), 25, rng)
     sentence_rows = find_one_unknown_sentences(
         sentence_tokens=sentence_tokens,
         lower_to_idx=lower_to_idx,
@@ -1201,13 +1505,15 @@ def analyze_book(
         path=path,
         token_count=len(tokens),
         type_count=len(token_counts),
-        in_vocab_token_count=len(tokens) - oov_token_count,
+        proper_noun_excluded_token_count=proper_noun_excluded_token_count,
+        in_vocab_token_count=len(tokens) - proper_noun_excluded_token_count - oov_token_count,
         oov_token_count=oov_token_count,
         expected_unknown_token_count=expected_unknown_token_count,
         expected_unknown_type_count=len(expected_unknown_types),
         known_words=sampled_known,
         unknown_words=sampled_unknown,
         oov_words=sampled_oov,
+        detected_names=sampled_names,
         one_unknown_sentences=sentence_rows,
     )
 
@@ -1262,10 +1568,15 @@ def find_one_unknown_sentences(
 def print_analysis(analysis: BookAnalysis) -> None:
     unknown_pct = 0.0 if analysis.in_vocab_token_count == 0 else 100.0 * analysis.expected_unknown_token_count / analysis.in_vocab_token_count
     oov_pct = 0.0 if analysis.token_count == 0 else 100.0 * analysis.oov_token_count / analysis.token_count
+    proper_noun_pct = 0.0 if analysis.token_count == 0 else 100.0 * analysis.proper_noun_excluded_token_count / analysis.token_count
     print("\n=== Book Vocabulary Estimate ===")
     print(f"Book: {analysis.path.name}")
     print(f"Word tokens analyzed: {analysis.token_count}")
     print(f"Unique word types: {analysis.type_count}")
+    print(
+        "Proper-noun tokens excluded from analysis: "
+        f"{analysis.proper_noun_excluded_token_count} ({proper_noun_pct:.2f}% of all tokens)"
+    )
     print(f"In-vocabulary tokens used for estimates: {analysis.in_vocab_token_count}")
     print(f"Out-of-model-vocabulary tokens discarded from estimates: {analysis.oov_token_count} ({oov_pct:.2f}% of all tokens)")
     print(f"Estimated unknown in-vocabulary tokens: {analysis.expected_unknown_token_count} ({unknown_pct:.2f}% of in-vocabulary tokens)")
@@ -1277,6 +1588,8 @@ def print_analysis(analysis: BookAnalysis) -> None:
     print_word_rows(analysis.unknown_words)
     print("\n=== Random 25 Out-of-Model-Vocabulary Tokens ===")
     print_oov_rows(analysis.oov_words)
+    print("\n=== Random 25 Detected Names (Excluded Proper Nouns) ===")
+    print_oov_rows(analysis.detected_names)
 
     print("\n=== Sentences Expected To Have Exactly One Unknown Word ===")
     if len(analysis.one_unknown_sentences) == 0:
