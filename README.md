@@ -223,13 +223,10 @@ Practical guidance:
 |---|---|---|---|
 | `rasch` | non-neural | fastest | Good baseline for quick checks. |
 | `twopl` | non-neural | very fast | Slightly richer than Rasch. |
-| `vote` | non-neural | very fast | User-similarity vote model. |
-| `svd` | non-neural | fast | Strong collaborative latent model. |
-| `rasch_vote` | non-neural | fast | Lightweight hybrid. |
-| `user_logreg` | non-neural | medium | Fits per-user logistic model from observed answers. |
-| `fasttext_kernel` | non-neural | medium | Semantic kernel logistic model over embeddings. |
+| `rasch_twopl_vote_user` | non-neural ensemble | medium | Strong practical blend for mixed budgets. |
 | `best_high_budget` | non-neural ensemble | medium | Best fixed blend for larger observed budgets. |
 | `best_adaptive` | non-neural ensemble | medium | Current default/best practical model. |
+| `best_grouped_irt_model` | grouped IRT | medium | Best grouped-residual IRT variant in current benchmarks. |
 
 Example with a fast non-neural model:
 

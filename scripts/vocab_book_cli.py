@@ -38,14 +38,7 @@ MODEL_HELP: dict[str, str] = {
     "best_high_budget": "Best high-budget fixed blend. Strong at large query budgets.",
     "rasch": "Fastest non-neural baseline: one-parameter IRT.",
     "twopl": "Fast non-neural baseline: two-parameter IRT.",
-    "vote": "Fast nearest-user voting baseline.",
-    "user_logreg": "Per-user logistic regression on rich word features.",
-    "rasch_vote": "Fast hybrid: Rasch + vote.",
     "rasch_twopl_vote_user": "Non-neural four-way blend: Rasch + TwoPL + vote + user logreg.",
-    "svd": "Fast latent collaborative non-neural model.",
-    "fasttext_kernel": "Non-neural semantic kernel logistic model over fastText features.",
-    "grouped_irt": "Grouped residual IRT with soft groups from fastText embeddings.",
-    "grouped_irt_twopl_hybrid": "Grouped residual IRT blended with TwoPL IRT.",
     "best_grouped_irt_model": "Best grouped residual IRT spec from best_grouped_irt_model.md (response12/g12/tau1.6/c12).",
 }
 MODEL_ESTIMATED_PRECISION: dict[str, float] = {
@@ -53,14 +46,7 @@ MODEL_ESTIMATED_PRECISION: dict[str, float] = {
     "best_high_budget": 0.842,
     "rasch": 0.840,
     "twopl": 0.839,
-    "vote": 0.833,
-    "user_logreg": 0.751,
-    "rasch_vote": 0.840,
     "rasch_twopl_vote_user": 0.841,
-    "svd": 0.809,
-    "fasttext_kernel": 0.796,
-    "grouped_irt": 0.790,
-    "grouped_irt_twopl_hybrid": 0.798,
     "best_grouped_irt_model": 0.893,
 }
 
@@ -330,38 +316,6 @@ def build_estimator(model_key: str, seed: int) -> Estimator:
         estimator = TwoPLIRTOnlineEstimator(prior_var=25.0, lr=1.0, n_fit_steps=20)
         estimator.name = "twopl_highbudget_var25"
         return estimator
-    if model_key == "vote":
-        from vocab_benchmark.estimators.observed_user_vote import ObservedMatchUserVoteEstimator
-
-        estimator = ObservedMatchUserVoteEstimator(temperature=0.10, prior_blend=0.0, power=1.0)
-        estimator.name = "observed_match_user_vote_t10"
-        return estimator
-    if model_key == "user_logreg":
-        from vocab_benchmark.estimators.online_user_logistic import OnlineUserLogisticEstimator
-
-        estimator = OnlineUserLogisticEstimator(
-            regularization_c=0.1,
-            prior_blend=0.5,
-            class_weight_balanced=False,
-            min_observations=50,
-        )
-        estimator.name = "online_user_logreg_c01_pb50"
-        return estimator
-    if model_key == "rasch_vote":
-        from vocab_benchmark.estimators.ensemble import WeightedAveragedEnsembleEstimator
-        from vocab_benchmark.estimators.irt import RaschIRTOnlineEstimator
-        from vocab_benchmark.estimators.observed_user_vote import ObservedMatchUserVoteEstimator
-
-        rasch = RaschIRTOnlineEstimator(prior_var=25.0, lr=1.0, n_fit_steps=20)
-        rasch.name = "rasch_highbudget_var25"
-        vote = ObservedMatchUserVoteEstimator(temperature=0.10, prior_blend=0.0, power=1.0)
-        vote.name = "observed_match_user_vote_t10"
-        return WeightedAveragedEnsembleEstimator(
-            members=[rasch, vote],
-            weights=[0.80, 0.20],
-            name="rasch_vote_hybrid_w80_20",
-            logit_bias=0.0,
-        )
     if model_key == "rasch_twopl_vote_user":
         from vocab_benchmark.estimators.ensemble import WeightedAveragedEnsembleEstimator
         from vocab_benchmark.estimators.irt import RaschIRTOnlineEstimator, TwoPLIRTOnlineEstimator
@@ -385,71 +339,6 @@ def build_estimator(model_key: str, seed: int) -> Estimator:
             members=[rasch, twopl, vote, user_logreg],
             weights=[0.35, 0.45, 0.15, 0.05],
             name="rasch_twopl_vote_user_w35_45_15_05",
-            logit_bias=0.0,
-        )
-    if model_key == "svd":
-        from vocab_benchmark.estimators.svd import SVDRidgeUserEstimator
-
-        estimator = SVDRidgeUserEstimator(rank=5, ridge=1.0, residual_scale=0.5, intercept_ridge=1.0)
-        estimator.name = "svd_ridge_r5_l1_s05"
-        return estimator
-    if model_key == "fasttext_kernel":
-        from vocab_benchmark.estimators.fasttext_kernel import FastTextKernelLogisticConfig, FastTextKernelLogisticEstimator
-
-        return FastTextKernelLogisticEstimator(
-            FastTextKernelLogisticConfig(
-                embedding_dim=300,
-                temperature=0.15,
-                episodes_per_user=12,
-                target_samples_per_episode=256,
-                seed=seed,
-                regularization_c=1.0,
-                dynamic_centering_weight=1.0,
-                user_rate_centering_weight=0.35,
-            )
-        )
-    if model_key == "grouped_irt":
-        from vocab_benchmark.estimators.irt import GroupedResidualIRTOnlineEstimator
-
-        estimator = GroupedResidualIRTOnlineEstimator(
-            prior_var=25.0,
-            lr=1.0,
-            n_fit_steps=20,
-            n_groups=16,
-            grouping_strategy="anchor_cosine",
-            group_temperature=0.10,
-            residual_prior_var=200.0,
-            embedding_dim=300,
-            random_state=seed,
-            kmeans_n_init=10,
-            pca_components=8,
-        )
-        estimator.name = "grouped_residual_irt_anchor_cosine_g16_t010_rp200"
-        return estimator
-    if model_key == "grouped_irt_twopl_hybrid":
-        from vocab_benchmark.estimators.ensemble import WeightedAveragedEnsembleEstimator
-        from vocab_benchmark.estimators.irt import GroupedResidualIRTOnlineEstimator, TwoPLIRTOnlineEstimator
-
-        grouped = GroupedResidualIRTOnlineEstimator(
-            prior_var=25.0,
-            lr=1.0,
-            n_fit_steps=20,
-            n_groups=16,
-            grouping_strategy="anchor_cosine",
-            group_temperature=0.10,
-            residual_prior_var=200.0,
-            embedding_dim=300,
-            random_state=seed,
-            kmeans_n_init=10,
-            pca_components=8,
-        )
-        grouped.name = "grouped_residual_irt_anchor_cosine_g16_t010_rp200"
-        twopl = TwoPLIRTOnlineEstimator(prior_var=25.0, lr=1.0, n_fit_steps=20)
-        twopl.name = "twopl_highbudget_var25"
-        return WeightedAveragedEnsembleEstimator(
-            members=[grouped, twopl],
-            weights=[0.60, 0.40],
-            name="grouped_residual_irt_anchor_cosine_g16_t010_rp200_twopl_hybrid_w60_40",
             logit_bias=0.0,
         )
     if model_key == "best_grouped_irt_model":
