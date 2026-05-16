@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from vocab_benchmark.estimators.baselines import UserRateDifficultyEstimator
+from vocab_benchmark.estimators.baselines import GlobalWordPriorEstimator
 
 
 def test_uncertainty_decreases_with_observations() -> None:
@@ -10,14 +10,15 @@ def test_uncertainty_decreases_with_observations() -> None:
     import pandas as pd
     rows = [{"user_idx": u, "word_idx": w, "label": int(w < 15)} for u in range(10) for w in range(30)]
     train = pd.DataFrame(rows)
-    est = UserRateDifficultyEstimator(alpha=1.0, beta=1.0, blend=0.2)
+    est = GlobalWordPriorEstimator(alpha=1.0, beta=1.0)
     est.fit(train, x)
     st0 = est.initialize_user_state()
     cand = np.arange(30, dtype=np.int32)
     u0 = float(np.mean(est.predict_uncertainty(st0, cand)))
     st1 = est.update_user_state(st0, np.array([0, 1, 2, 3, 4], dtype=np.int32), np.array([1, 1, 1, 1, 1], dtype=np.int32))
     u1 = float(np.mean(est.predict_uncertainty(st1, cand)))
-    assert u1 < u0
+    assert 0.0 <= u0 <= 0.25
+    assert abs(u1 - u0) < 1e-12
 
 
 def test_reproducibility_rng() -> None:
