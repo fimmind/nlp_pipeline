@@ -11,6 +11,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+import time
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -434,14 +435,15 @@ def parse_args() -> argparse.Namespace:
             "semirandom",
             "adaptive_entropy",
             "adaptive_uncertainty",
+            "adaptive_uncertainty_light_random",
             "adaptive_stochastic_entropy",
             "adaptive_eer_fast",
             "adaptive_hybrid_fast",
         ],
-        help="How to choose quiz words. 'auto' uses adaptive_uncertainty for best_grouped_irt_model and static otherwise.",
+        help="How to choose quiz words. 'auto' uses adaptive_uncertainty_light_random for best_grouped_irt_model and static otherwise.",
     )
     parser.add_argument("--answer-string", type=str, default=None, help="Automation helper: quiz-size chars from y/n/1/0/k/u.")
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--seed", type=int, default=None, help="Random seed. If omitted, uses current time.")
     parser.add_argument("--known-threshold", type=float, default=0.5)
     parser.add_argument("--model", type=str, default=DEFAULT_MODEL_KEY, choices=sorted(MODEL_HELP.keys()))
     parser.add_argument("--list-models", action="store_true", help="Print available models and exit.")
@@ -1022,6 +1024,7 @@ def _build_quiz_policy(strategy: str) -> "QueryPolicy":
         ExpectedEntropyReductionPolicy,
         StagedAdaptivePolicy,
         StochasticTopKEntropyPolicy,
+        StochasticTopKUncertaintyPolicy,
         UncertaintyPolicy,
     )
 
@@ -1029,6 +1032,8 @@ def _build_quiz_policy(strategy: str) -> "QueryPolicy":
         return EntropyPolicy()
     if strategy == "adaptive_uncertainty":
         return UncertaintyPolicy()
+    if strategy == "adaptive_uncertainty_light_random":
+        return StochasticTopKUncertaintyPolicy(top_k=3, temperature=0.03)
     if strategy == "adaptive_stochastic_entropy":
         return StochasticTopKEntropyPolicy(top_k=3, temperature=0.03)
     if strategy == "adaptive_eer_fast":
@@ -1747,6 +1752,9 @@ def main() -> None:
         raise ValueError("known-threshold must be between 0 and 1")
     if args.quiz_size <= 0:
         raise ValueError("quiz-size must be positive")
+    effective_seed = int(args.seed) if args.seed is not None else int(time.time_ns() % (2**31 - 1))
+    if args.seed is None:
+        print(f"Using generated seed: {effective_seed}")
 
     data_fp = dataset_fingerprint(args.data_dir)
     words, word_index, lower_to_idx, idx_to_word = load_word_context(args.data_dir)
@@ -1760,7 +1768,7 @@ def main() -> None:
         requested_strategy = str(args.quiz_strategy)
         effective_strategy = requested_strategy
         if requested_strategy == "auto":
-            effective_strategy = "adaptive_uncertainty" if args.model == "best_grouped_irt_model" else "static"
+            effective_strategy = "adaptive_uncertainty_light_random" if args.model == "best_grouped_irt_model" else "static"
 
         if effective_strategy.startswith("adaptive_"):
             print(f"Using adaptive quiz strategy: {effective_strategy}")
@@ -1768,7 +1776,7 @@ def main() -> None:
             if not args.disable_cache and model_path.exists():
                 estimator_for_quiz = load_or_fit_estimator(
                     model_key=args.model,
-                    seed=args.seed,
+                    seed=effective_seed,
                     response_frame=None,
                     x_words=None,
                     cache_dir=args.cache_dir,
@@ -1781,7 +1789,7 @@ def main() -> None:
                     raise ValueError("responses_static is empty; cannot build adaptive quiz candidate pool")
                 estimator_for_quiz = load_or_fit_estimator(
                     model_key=args.model,
-                    seed=args.seed,
+                    seed=effective_seed,
                     response_frame=full_response_frame,
                     x_words=_x_words,
                     cache_dir=args.cache_dir,
@@ -1801,7 +1809,7 @@ def main() -> None:
                     policy=policy,
                     candidate_word_ids=candidate_word_ids,
                     quiz_size=args.quiz_size,
-                    seed=args.seed,
+                    seed=effective_seed,
                 )
             else:
                 observed_word_ids, observed_labels = collect_answers_adaptive_from_string(
@@ -1810,7 +1818,7 @@ def main() -> None:
                     policy=policy,
                     candidate_word_ids=candidate_word_ids,
                     expected_len=args.quiz_size,
-                    seed=args.seed,
+                    seed=effective_seed,
                 )
         else:
             if effective_strategy == "semirandom" and args.model == "best_grouped_irt_model":
@@ -1818,7 +1826,7 @@ def main() -> None:
                 query_word_idx = build_grouped_irt_semirandom_query_words(
                     response_frame=response_frame,
                     sequence_len=args.quiz_size,
-                    seed=args.seed,
+                    seed=effective_seed,
                     user_key=args.profile,
                     local_window=3,
                     swap_probability=0.05,
@@ -1826,7 +1834,7 @@ def main() -> None:
                     replacement_pool_extra=30,
                 )
             else:
-                query_word_idx = build_query_words(response_frame, args.quiz_size, args.seed)
+                query_word_idx = build_query_words(response_frame, args.quiz_size, effective_seed)
             if len(query_word_idx) < args.quiz_size:
                 raise ValueError(f"query sequence produced only {len(query_word_idx)} words")
             if args.answer_string is None:
@@ -1866,7 +1874,7 @@ def main() -> None:
     if not args.disable_cache and model_path.exists():
         estimator = load_or_fit_estimator(
             model_key=args.model,
-            seed=args.seed,
+            seed=effective_seed,
             response_frame=None,
             x_words=None,
             cache_dir=args.cache_dir,
@@ -1879,7 +1887,7 @@ def main() -> None:
             raise ValueError("word table mismatch between lightweight and full context")
         estimator = load_or_fit_estimator(
             model_key=args.model,
-            seed=args.seed,
+            seed=effective_seed,
             response_frame=response_frame,
             x_words=x_words,
             cache_dir=args.cache_dir,
@@ -1913,7 +1921,7 @@ def main() -> None:
                 idx_to_word=idx_to_word,
                 probs_all_words=probs_all_words,
                 threshold=args.known_threshold,
-                seed=args.seed,
+                seed=effective_seed,
                 cache_dir=args.cache_dir,
                 data_fp=data_fp,
                 disable_cache=args.disable_cache,

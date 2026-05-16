@@ -148,6 +148,44 @@ class UncertaintyPolicy(QueryPolicy):
 
 
 @dataclass(frozen=True)
+class StochasticTopKUncertaintyPolicy(QueryPolicy):
+    top_k: int
+    temperature: float
+    name: str = "stochastic_topk_uncertainty"
+
+    def select_next_queries(
+        self,
+        estimator: Estimator,
+        user_state: UserState,
+        candidate_word_ids: np.ndarray,
+        already_queried_word_ids: set[int],
+        batch_size: int,
+        rng: np.random.Generator,
+    ) -> np.ndarray:
+        pool = np.array([w for w in candidate_word_ids.tolist() if w not in already_queried_word_ids], dtype=np.int32)
+        if len(pool) == 0:
+            return np.array([], dtype=np.int32)
+        uncertainty = estimator.predict_uncertainty(user_state, pool)
+        out: list[int] = []
+        available = np.ones(len(pool), dtype=bool)
+        top_k_eff = max(1, int(self.top_k))
+        temp = max(float(self.temperature), 1e-6)
+        for _ in range(min(batch_size, len(pool))):
+            idx = np.where(available)[0]
+            if len(idx) == 0:
+                break
+            cand = idx[np.argsort(-uncertainty[idx])[: min(top_k_eff, len(idx))]]
+            logits = uncertainty[cand] / temp
+            logits = logits - np.max(logits)
+            probs = np.exp(np.clip(logits, -60.0, 60.0))
+            probs = probs / np.maximum(np.sum(probs), 1e-12)
+            choice = int(rng.choice(cand, p=probs))
+            out.append(int(pool[choice]))
+            available[choice] = False
+        return np.array(out, dtype=np.int32)
+
+
+@dataclass(frozen=True)
 class StochasticTopKEntropyPolicy(QueryPolicy):
     top_k: int
     temperature: float
