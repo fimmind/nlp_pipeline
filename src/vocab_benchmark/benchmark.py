@@ -10,9 +10,8 @@ import numpy as np
 import pandas as pd
 
 from .data import load_all
-from .estimators.baselines import DifficultyStratifiedBetaEstimator, GlobalWordPriorEstimator, UserRateDifficultyEstimator
+from .estimators.baselines import GlobalWordPriorEstimator
 from .estimators.irt import RaschIRTOnlineEstimator, TwoPLIRTOnlineEstimator
-from .estimators.mf import LowRankMFOnlineEstimator
 from .estimators.neural import AveragedEnsembleEstimator, NeuralEncoderDecoderEstimator, NeuralEstimatorConfig
 from .features import build_response_frame, build_word_feature_matrix, build_word_index
 from .metrics import classification_metrics
@@ -184,6 +183,7 @@ def _evaluate_responses(
     cold_word_idx: set[int] | None = None,
     max_interactions_per_user: int | None = None,
     max_candidate_words_per_user: int | None = None,
+    evaluation_protocol: str = "loou_user_generalization",
 ) -> pd.DataFrame:
     users = sorted(responses["user_id"].astype(str).unique().tolist())
     user_index = {u: i for i, u in enumerate(users)}
@@ -251,6 +251,7 @@ def _evaluate_responses(
                     row = {
                         "dataset_name": dataset_name,
                         "data_mode": data_mode,
+                        "evaluation_protocol": evaluation_protocol,
                         "embedding_backend": embedding_backend,
                         "estimator": estimator.name,
                         "query_policy": policy.name,
@@ -267,6 +268,108 @@ def _evaluate_responses(
                     }
                     row.update(m)
                     all_rows.append(row)
+    return pd.DataFrame(all_rows)
+
+
+def _evaluate_within_user_completion(
+    responses: pd.DataFrame,
+    words: pd.DataFrame,
+    x_words: np.ndarray,
+    embedding_backend: str,
+    dataset_name: str,
+    data_mode: str,
+    estimators: list[Any],
+    policies: list[Any],
+    budgets: list[int],
+    rng: np.random.Generator,
+    fixed_query_sequence: np.ndarray | None = None,
+    max_interactions_per_user: int | None = None,
+    max_candidate_words_per_user: int | None = None,
+    n_repeats: int = 3,
+    evaluation_protocol: str = "within_user_completion",
+) -> pd.DataFrame:
+    users = sorted(responses["user_id"].astype(str).unique().tolist())
+    user_index = {u: i for i, u in enumerate(users)}
+    word_index = build_word_index(words)
+    resp = build_response_frame(responses, user_index, word_index)
+    if max_interactions_per_user is not None and max_interactions_per_user > 0:
+        resp = (
+            resp.sort_values(["user_idx"])
+            .groupby("user_idx", group_keys=False)
+            .head(max_interactions_per_user)
+            .reset_index(drop=True)
+        )
+    all_rows: list[dict[str, Any]] = []
+    for estimator in estimators:
+        estimator.fit(resp, x_words)
+        for policy in policies:
+            for repeat_idx in range(n_repeats):
+                for test_user in users:
+                    test_uidx = user_index[test_user]
+                    user_rows = resp[resp["user_idx"] == test_uidx]
+                    if user_rows.empty:
+                        continue
+                    state = estimator.initialize_user_state()
+                    labels_by_word = {int(r.word_idx): int(r.label) for r in user_rows.itertuples()}
+                    candidate = np.array(sorted(labels_by_word.keys()), dtype=np.int32)
+                    if max_candidate_words_per_user is not None and len(candidate) > max_candidate_words_per_user:
+                        candidate = np.sort(rng.choice(candidate, size=max_candidate_words_per_user, replace=False))
+                    queried: set[int] = set()
+                    observed_ids = np.array([], dtype=np.int32)
+                    observed_labels = np.array([], dtype=np.int32)
+                    h0 = None
+                    queries_to_confidence_80 = np.nan
+                    start = time.perf_counter()
+                    for q in budgets:
+                        if q > len(candidate):
+                            continue
+                        needed = q - len(queried)
+                        if needed > 0:
+                            if fixed_query_sequence is None:
+                                new_q = policy.select_next_queries(estimator, state, candidate, queried, needed, rng)
+                            else:
+                                allowed = [
+                                    int(w)
+                                    for w in fixed_query_sequence.tolist()
+                                    if int(w) in set(candidate.tolist()) and int(w) not in queried
+                                ]
+                                new_q = np.array(allowed[:needed], dtype=np.int32)
+                            new_l = np.array([labels_by_word[int(w)] for w in new_q], dtype=np.int32)
+                            queried.update(new_q.tolist())
+                            observed_ids = np.concatenate([observed_ids, new_q])
+                            observed_labels = np.concatenate([observed_labels, new_l])
+                            state = estimator.update_user_state(state, new_q, new_l)
+                        eval_ids = np.array([w for w in candidate.tolist() if w not in queried], dtype=np.int32)
+                        if len(eval_ids) == 0:
+                            continue
+                        y_true = np.array([labels_by_word[int(w)] for w in eval_ids], dtype=np.int32)
+                        y_prob = estimator.predict_proba(state, eval_ids)
+                        m = classification_metrics(y_true, y_prob)
+                        if h0 is None:
+                            h0 = m["mean_predictive_entropy"]
+                        nur = 0.0 if h0 <= 1e-12 else (h0 - m["mean_predictive_entropy"]) / h0
+                        if np.isnan(queries_to_confidence_80) and m["confident_fraction_0_2_0_8"] >= 0.8:
+                            queries_to_confidence_80 = float(q)
+                        row = {
+                            "dataset_name": dataset_name,
+                            "data_mode": data_mode,
+                            "evaluation_protocol": evaluation_protocol,
+                            "embedding_backend": embedding_backend,
+                            "estimator": estimator.name,
+                            "query_policy": policy.name,
+                            "split_id": f"within_user_{repeat_idx}_{test_user}",
+                            "user_id": test_user,
+                            "q": q,
+                            "n_train_users": int(len(users)),
+                            "n_words": int(len(words)),
+                            "n_observed_labels": int(len(observed_ids)),
+                            "n_eval_labels": int(len(eval_ids)),
+                            "normalized_uncertainty_reduction": float(nur),
+                            "queries_to_confidence_80": queries_to_confidence_80,
+                            "runtime_seconds": float(time.perf_counter() - start),
+                        }
+                        row.update(m)
+                        all_rows.append(row)
     return pd.DataFrame(all_rows)
 
 
@@ -343,12 +446,28 @@ def _select_neural_estimators_by_validation(
 
 def _queries_to_target(summary_df: pd.DataFrame, thresholds: list[float]) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
-    for est, g in summary_df.groupby("estimator"):
+    group_cols = ["estimator"]
+    if "evaluation_protocol" in summary_df.columns:
+        group_cols = ["evaluation_protocol", "estimator"]
+    for group_key, g in summary_df.groupby(group_cols):
         tmp = g.sort_values("q")
+        if isinstance(group_key, tuple):
+            evaluation_protocol = str(group_key[0])
+            estimator_name = str(group_key[1])
+        else:
+            evaluation_protocol = "unknown"
+            estimator_name = str(group_key)
         for threshold in thresholds:
             reached = tmp[tmp["balanced_accuracy"] >= threshold]
             q = int(reached["q"].min()) if not reached.empty else np.nan
-            rows.append({"estimator": est, "target_balanced_accuracy": threshold, "queries_to_target": q})
+            rows.append(
+                {
+                    "evaluation_protocol": evaluation_protocol,
+                    "estimator": estimator_name,
+                    "target_balanced_accuracy": threshold,
+                    "queries_to_target": q,
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -405,11 +524,8 @@ def run_benchmark(data_dir: Path, reports_dir: Path, seed: int, max_users: int) 
     difficulty = x_words[:, -1] if x_words.shape[1] > 0 else np.zeros(len(x_words))
     estimators = [
         GlobalWordPriorEstimator(alpha=1.0, beta=1.0),
-        UserRateDifficultyEstimator(alpha=1.0, beta=1.0, blend=0.6),
-        DifficultyStratifiedBetaEstimator(alpha=1.0, beta=1.0, n_bins=5),
         RaschIRTOnlineEstimator(prior_var=4.0, lr=1.0, n_fit_steps=3),
         TwoPLIRTOnlineEstimator(prior_var=4.0, lr=1.0, n_fit_steps=3),
-        LowRankMFOnlineEstimator(rank=8, n_epochs=2, lr=0.05, reg=0.01, seed=seed),
     ]
     policies = [
         UniformRandomPolicy(),
@@ -421,18 +537,18 @@ def run_benchmark(data_dir: Path, reports_dir: Path, seed: int, max_users: int) 
     fixed_budgets = [50, 100, 200]
     temporal_budgets = [0, 1, 2, 5, 10, 20, 50, 100]
 
-    static_df = _evaluate_responses(
+    static_df = _evaluate_within_user_completion(
         responses=responses_static,
         words=words,
         x_words=x_words,
         embedding_backend=embedding_backend,
         dataset_name=dataset_name,
-        data_mode="synthetic" if synthetic_mode else "static",
-        splits=splits,
+        data_mode="synthetic_within_user" if synthetic_mode else "static_within_user",
         estimators=estimators,
         policies=policies,
         budgets=static_budgets,
         rng=rng,
+        n_repeats=3,
         max_candidate_words_per_user=2000,
     )
 
@@ -555,17 +671,25 @@ def run_benchmark(data_dir: Path, reports_dir: Path, seed: int, max_users: int) 
     if not all_static_df.empty:
         leaderboard_df = (
             all_static_df[all_static_df["q"].isin([50, 100, 200])]
-            .groupby(["estimator", "q"], as_index=False)[["balanced_accuracy", "accuracy", "nll", "brier", "auroc"]]
+            .groupby(["evaluation_protocol", "estimator", "q"], as_index=False)[
+                ["balanced_accuracy", "accuracy", "nll", "brier", "auroc"]
+            ]
             .mean()
         )
         leaderboard_path = reports_dir / "leaderboard_static_fixed200.csv"
         leaderboard_df.to_csv(leaderboard_path, index=False)
         qt = _queries_to_target(leaderboard_df, thresholds=[0.90, 0.95])
-        qt.to_csv(reports_dir / "queries_to_target.csv", index=False)
-        merged = leaderboard_df.merge(qt, on="estimator", how="left")
+        qt_path = reports_dir / "queries_to_target.csv"
+        qt.to_csv(qt_path, index=False)
+        merged = leaderboard_df.merge(qt, on=["evaluation_protocol", "estimator"], how="left")
         (reports_dir / "leaderboard_static_fixed200.md").write_text(_to_markdown_table(merged), encoding="utf-8")
-        best = leaderboard_df[leaderboard_df["q"] <= 200]["balanced_accuracy"].max()
-        statement = {"reached_balanced_accuracy_0_95_at_q_le_200": bool(best >= 0.95 if pd.notna(best) else False)}
+        within_user_rows = leaderboard_df[leaderboard_df["evaluation_protocol"] == "within_user_completion"]
+        best_source = within_user_rows if not within_user_rows.empty else leaderboard_df
+        best = best_source[best_source["q"] <= 200]["balanced_accuracy"].max()
+        statement = {
+            "evaluation_protocol": "within_user_completion" if not within_user_rows.empty else "mixed",
+            "reached_balanced_accuracy_0_95_at_q_le_200": bool(best >= 0.95 if pd.notna(best) else False),
+        }
         (reports_dir / "balanced_accuracy_target_statement.json").write_text(json.dumps(statement, indent=2), encoding="utf-8")
 
     _plot_metric(all_static_df, "nll", plots / "nll_vs_q.png")
