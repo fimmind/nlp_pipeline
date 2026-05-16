@@ -22,4 +22,22 @@ export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
 export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-1}"
 export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/matplotlib}"
 
-exec "${PYTHON_BIN}" "${REPO_ROOT}/scripts/vocab_book_cli.py" "$@"
+ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -n|--num-words)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: $1 requires a value." >&2
+        exit 1
+      fi
+      ARGS+=("--quiz-size" "$2")
+      shift 2
+      ;;
+    *)
+      ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+exec "${PYTHON_BIN}" "${REPO_ROOT}/scripts/vocab_book_cli.py" "${ARGS[@]}"

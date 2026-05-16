@@ -47,3 +47,6 @@ data/DATASET_CARD.json
 
 # Vocab book CLI caches
 data/cache/vocab_book_cli/
+
+# User profiles
+data/user_profiles/**
