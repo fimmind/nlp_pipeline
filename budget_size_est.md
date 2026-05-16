@@ -53,3 +53,30 @@ Rasch vs best previously tested model at each budget (raw accuracy gap):
 Rasch source files:
 - `reports/budget_size_est/rasch_raw_accuracy_q10_100.csv`
 - `reports/budget_size_est/rasch_summary_q10_100.csv`
+
+## Current Best Model: Balanced Accuracy vs Query Budget
+Evaluation setup:
+- Model: `response12_g12_tau1p6_c12p0_observed_ba_opt_shrunk` (current best grouped residual IRT in practical pipeline).
+- Protocol: `within_user_completion` (infer the rest of the same learner's vocabulary after `q` answers).
+- Budgets: `q = 10, 20, 30, 50, 100, 200`.
+- Query sequence: fixed global `user_discriminative` sequence (deterministic seed `42`).
+- Repeats: `3`.
+- Features: `rich`.
+- State progression: incremental updates only (state is not rebuilt from scratch between budgets).
+
+| q | balanced_accuracy | accuracy | nll | brier | auroc |
+|---:|---:|---:|---:|---:|---:|
+| 10 | 0.7588 | 0.7726 | 0.5008 | 0.1636 | 0.8673 |
+| 20 | 0.7888 | 0.7736 | 0.5071 | 0.1655 | 0.8802 |
+| 30 | 0.7942 | 0.7982 | 0.4767 | 0.1529 | 0.8878 |
+| 50 | 0.8085 | 0.8112 | 0.4526 | 0.1435 | 0.8952 |
+| 100 | 0.8284 | 0.8366 | 0.4103 | 0.1274 | 0.8992 |
+| 200 | 0.8193 | 0.8296 | 0.3995 | 0.1259 | 0.8858 |
+
+Notes:
+- Balanced accuracy improves strongly from `q=10` to `q=100` (+0.0696 absolute), then slightly drops at `q=200` in this run.
+- Peak in this sweep is at `q=100` with BA `0.8284`.
+
+Source files:
+- `reports/budget_size_est/current_best_budget_sweep_raw.csv`
+- `reports/budget_size_est/current_best_budget_sweep_summary.csv`
