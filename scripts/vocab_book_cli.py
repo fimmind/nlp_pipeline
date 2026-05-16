@@ -863,6 +863,13 @@ def load_full_model_context(data_dir: Path) -> tuple[pd.DataFrame, np.ndarray, p
     return words, x_words, response_frame
 
 
+def load_response_frame_light(data_dir: Path, word_index: dict[str, int]) -> pd.DataFrame:
+    responses_path = data_dir / "processed" / "responses_static.csv"
+    responses = pd.read_csv(responses_path)
+    user_index = {u: i for i, u in enumerate(sorted(responses["user_id"].astype(str).unique().tolist()))}
+    return build_response_frame(responses, user_index, word_index)
+
+
 def _stable_seed_from_text(text: str, base_seed: int) -> int:
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
     value = int(digest[:16], 16)
@@ -1749,7 +1756,7 @@ def main() -> None:
         observed_word_ids, observed_labels, payload = load_profile(path, word_index)
         print(f"Loaded profile: {path} ({len(observed_labels)} answers, created_at={payload.get('created_at')})")
     else:
-        _words_full, _x_words, response_frame = load_full_model_context(args.data_dir)
+        response_frame = load_response_frame_light(args.data_dir, word_index)
         requested_strategy = str(args.quiz_strategy)
         effective_strategy = requested_strategy
         if requested_strategy == "auto":
@@ -1757,15 +1764,30 @@ def main() -> None:
 
         if effective_strategy.startswith("adaptive_"):
             print(f"Using adaptive quiz strategy: {effective_strategy}")
-            estimator_for_quiz = load_or_fit_estimator(
-                model_key=args.model,
-                seed=args.seed,
-                response_frame=response_frame,
-                x_words=_x_words,
-                cache_dir=args.cache_dir,
-                data_fp=data_fp,
-                disable_cache=args.disable_cache,
-            )
+            model_path = model_cache_path(args.cache_dir, args.model, data_fp)
+            if not args.disable_cache and model_path.exists():
+                estimator_for_quiz = load_or_fit_estimator(
+                    model_key=args.model,
+                    seed=args.seed,
+                    response_frame=None,
+                    x_words=None,
+                    cache_dir=args.cache_dir,
+                    data_fp=data_fp,
+                    disable_cache=args.disable_cache,
+                )
+            else:
+                _words_full, _x_words, full_response_frame = load_full_model_context(args.data_dir)
+                if len(full_response_frame) == 0:
+                    raise ValueError("responses_static is empty; cannot build adaptive quiz candidate pool")
+                estimator_for_quiz = load_or_fit_estimator(
+                    model_key=args.model,
+                    seed=args.seed,
+                    response_frame=full_response_frame,
+                    x_words=_x_words,
+                    cache_dir=args.cache_dir,
+                    data_fp=data_fp,
+                    disable_cache=args.disable_cache,
+                )
             candidate_word_ids = np.array(sorted(response_frame["word_idx"].astype(int).unique().tolist()), dtype=np.int32)
             if len(candidate_word_ids) < args.quiz_size:
                 raise ValueError(
