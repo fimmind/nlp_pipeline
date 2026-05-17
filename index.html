@@ -70,6 +70,14 @@
           </div>
         </div>
         <div class="field">
+          <label for="knownThreshold">Known-word threshold (0.1 to 0.9)</label>
+          <div class="count-wrap">
+            <input id="knownThreshold" type="range" min="0.1" max="0.9" step="0.05" value="0.5" />
+            <output id="knownThresholdValue">0.50</output>
+          </div>
+          <p class="meta">Lower = more words marked as known. Raise if the model is too generous.</p>
+        </div>
+        <div class="field">
           <label for="bookUpload">Book (.txt)</label>
           <div class="field-inline">
             <input id="bookUpload" type="file" accept=".txt" />

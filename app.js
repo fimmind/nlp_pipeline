@@ -36,6 +36,8 @@ const ui = {
   resetBookBtn: document.getElementById("resetBookBtn"),
   bookName: document.getElementById("bookName"),
   heroBookChip: document.getElementById("heroBookChip"),
+  knownThreshold: document.getElementById("knownThreshold"),
+  knownThresholdValue: document.getElementById("knownThresholdValue"),
 };
 
 const state = {
@@ -43,7 +45,7 @@ const state = {
   bookText: "",
   profiles: loadProfilesStore(),
   currentNickname: "default",
-  profile: { answers: {}, questionCount: 100, modelKey: MODEL_DEFAULT, strategy: STRATEGY_DEFAULT },
+  profile: { answers: {}, questionCount: 100, modelKey: MODEL_DEFAULT, strategy: STRATEGY_DEFAULT, knownThreshold: 0.5 },
   quizWords: [],
   theme: "light",
   currentBatch: 0,
@@ -186,6 +188,9 @@ function initControls() {
   ui.questionCountValue.textContent = String(q);
   ui.modelSelect.value = state.profile.modelKey || MODEL_DEFAULT;
   ui.quizStrategy.value = state.profile.strategy || STRATEGY_DEFAULT;
+  const t = Math.min(0.9, Math.max(0.1, Number(state.profile.knownThreshold) || 0.5));
+  ui.knownThreshold.value = String(t);
+  ui.knownThresholdValue.textContent = t.toFixed(2);
 }
 
 async function loadData(modelKey) {
@@ -760,11 +765,12 @@ function analyzeBook(theta) {
   const knownRows = [];
   const unknownRows = [];
 
+  const threshold = Math.min(0.9, Math.max(0.1, Number(state.profile.knownThreshold) || 0.5));
   for (const [word, idx] of inVocabWords.entries()) {
     const count = tokenFreq.get(word) || 0;
     const { p, observed } = effectiveWordBelief(theta, word, idx);
     inVocabTokenCount += count;
-    if (p >= 0.5) knownRows.push({ word, p, count, observed });
+    if (p >= threshold) knownRows.push({ word, p, count, observed });
     else {
       unknownRows.push({ word, p, count });
       unknownTokenCount += count;
@@ -794,7 +800,7 @@ function analyzeBook(theta) {
       const idx = state.model.wordToIdx.get(l);
       if (idx == null) { hasOov = true; break; }
       const { p } = effectiveWordBelief(theta, l, idx);
-      if (p < 0.5) unknowns.push({ word: l, p });
+      if (p < threshold) unknowns.push({ word: l, p });
     }
     if (!hasOov && unknowns.length === 1) {
       sentenceRows.push({ sentence, word: unknowns[0].word, p: unknowns[0].p });
@@ -1054,6 +1060,16 @@ async function main() {
 
   ui.questionCount.addEventListener("input", () => {
     ui.questionCountValue.textContent = ui.questionCount.value;
+  });
+
+  ui.knownThreshold.addEventListener("input", () => {
+    const t = Number(ui.knownThreshold.value);
+    ui.knownThresholdValue.textContent = t.toFixed(2);
+    state.profile.knownThreshold = t;
+    saveCurrentProfile();
+    if (!ui.resultsSection.classList.contains("hidden")) {
+      runEstimation();
+    }
   });
 
   ui.modelSelect.addEventListener("change", switchModel);
