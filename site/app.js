@@ -41,6 +41,11 @@ const state = {
   profile: { answers: {}, questionCount: 100, modelKey: MODEL_DEFAULT, strategy: STRATEGY_DEFAULT },
   quizWords: [],
   theme: "light",
+  currentBatch: 0,
+  batchSize: 10,
+  isAdaptiveQuiz: false,
+  quizSeed: 0,
+  totalQuestionCount: 100,
 };
 
 function normalizeWord(token) {
@@ -574,6 +579,41 @@ function getQuizWords(questionCount, strategy) {
   }
 }
 
+function isAdaptiveStrategy(strategy) {
+  return [
+    "adaptive_uncertainty",
+    "adaptive_uncertainty_light_random",
+    "adaptive_entropy",
+    "adaptive_stochastic_entropy",
+    "adaptive_eer_fast",
+    "adaptive_hybrid_fast",
+    "auto",
+  ].includes(strategy);
+}
+
+function getAdaptiveBatchWords(batchSize, strategy, rng) {
+  // Resolve auto like getQuizWords does
+  if (strategy === "auto") {
+    strategy = state.profile.modelKey === "best_grouped_irt_model" ? "adaptive_uncertainty_light_random" : "static";
+  }
+  switch (strategy) {
+    case "adaptive_uncertainty":
+      return getQuizWordsAdaptiveUncertainty(batchSize, rng);
+    case "adaptive_uncertainty_light_random":
+      return getQuizWordsAdaptiveUncertaintyLightRandom(batchSize, rng);
+    case "adaptive_entropy":
+      return getQuizWordsAdaptiveEntropy(batchSize, rng);
+    case "adaptive_stochastic_entropy":
+      return getQuizWordsAdaptiveStochasticEntropy(batchSize, rng);
+    case "adaptive_eer_fast":
+      return getQuizWordsAdaptiveEerFast(batchSize, rng);
+    case "adaptive_hybrid_fast":
+      return getQuizWordsAdaptiveHybridFast(batchSize, rng);
+    default:
+      return getQuizWordsStatic(batchSize, rng);
+  }
+}
+
 function getObservedPairs(quizWords) {
   const ids = [];
   const labels = [];
@@ -731,7 +771,15 @@ function renderChecklist(quizWords) {
 }
 
 function runEstimation() {
-  const { ids, labels } = getObservedPairs(state.quizWords);
+  const ids = [];
+  const labels = [];
+  for (const w of Object.keys(state.profile.answers)) {
+    const idx = state.model.wordToIdx.get(w);
+    if (idx != null) {
+      ids.push(idx);
+      labels.push(state.profile.answers[w]);
+    }
+  }
   const theta = estimateTheta(ids, labels);
   const analysis = analyzeBook(theta);
 
@@ -751,27 +799,71 @@ function startChecklist() {
   state.profile.questionCount = q;
   state.profile.strategy = strategy;
   saveCurrentProfile();
-  state.quizWords = getQuizWords(q, strategy);
 
-  renderChecklist(state.quizWords);
-  ui.quizProgress.textContent = `Mark known words, then submit (${state.quizWords.length} total). Strategy: ${strategy}.`;
+  state.totalQuestionCount = q;
+  state.currentBatch = 0;
+  state.quizSeed = hashStringToSeed(`${state.currentNickname}|${q}|${Date.now()}|${strategy}`);
+  state.isAdaptiveQuiz = isAdaptiveStrategy(strategy);
+
+  if (state.isAdaptiveQuiz) {
+    state.quizWords = [];
+  } else {
+    state.quizWords = getQuizWords(q, strategy);
+  }
+
+  loadNextBatch();
+
   ui.quizSection.classList.remove("hidden");
   ui.resultsSection.classList.add("hidden");
   ui.addWordsSection.classList.add("hidden");
 }
 
-function submitChecklist() {
+function loadNextBatch() {
+  const batchStart = state.currentBatch * state.batchSize;
+  const batchEnd = Math.min(batchStart + state.batchSize, state.totalQuestionCount);
+  const remainingTotal = state.totalQuestionCount - batchStart;
+  const batchCount = Math.ceil(state.totalQuestionCount / state.batchSize);
+
+  let batchWords;
+  if (state.isAdaptiveQuiz) {
+    const batchSeed = hashStringToSeed(`${state.quizSeed}|batch${state.currentBatch}`);
+    const rng = createRng(batchSeed);
+    const toAsk = Math.min(state.batchSize, remainingTotal);
+    batchWords = getAdaptiveBatchWords(toAsk, state.profile.strategy, rng);
+    state.quizWords.push(...batchWords);
+  } else {
+    batchWords = state.quizWords.slice(batchStart, batchEnd);
+  }
+
+  renderChecklist(batchWords);
+
+  const isLastBatch = batchEnd >= state.totalQuestionCount;
+  ui.submitChecklistBtn.textContent = isLastBatch ? "Submit Answers" : "Next Batch";
+  ui.quizProgress.textContent = `Batch ${state.currentBatch + 1} of ${batchCount} (${batchWords.length} words). Strategy: ${state.profile.strategy}. Total observed: ${Object.keys(state.profile.answers).length}.`;
+}
+
+function submitBatch() {
   const checks = ui.checklistWrap.querySelectorAll("input[type='checkbox'][data-word]");
   for (const item of checks) {
     const word = item.getAttribute("data-word");
     state.profile.answers[word] = item.checked ? 1 : 0;
   }
   saveCurrentProfile();
-  runEstimation();
+
+  state.currentBatch++;
+  const nextBatchStart = state.currentBatch * state.batchSize;
+
+  if (nextBatchStart < state.totalQuestionCount) {
+    loadNextBatch();
+  } else {
+    runEstimation();
+  }
 }
 
 function retakeTest() {
   state.profile.answers = {};
+  state.currentBatch = 0;
+  state.quizWords = [];
   saveCurrentProfile();
   ui.quizSection.classList.add("hidden");
   ui.resultsSection.classList.add("hidden");
@@ -893,7 +985,7 @@ async function main() {
   });
   ui.startBtn.addEventListener("click", startChecklist);
   ui.retakeBtn.addEventListener("click", retakeTest);
-  ui.submitChecklistBtn.addEventListener("click", submitChecklist);
+  ui.submitChecklistBtn.addEventListener("click", submitBatch);
   ui.resetBtn.addEventListener("click", resetProfile);
   ui.submitAddWordsBtn.addEventListener("click", submitAddWords);
   if (ui.themeToggleBtn) {
