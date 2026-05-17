@@ -53,6 +53,7 @@ const state = {
   isAdaptiveQuiz: false,
   quizSeed: 0,
   totalQuestionCount: 100,
+  lemmaDict: {},
 };
 
 function normalizeWord(token) {
@@ -108,13 +109,66 @@ function pickContextualLemma(token, prevToken, nextToken, vocabSet) {
   return best;
 }
 
+async function loadLemmaDict() {
+  try {
+    const res = await fetch("./data/lemma_dict.json");
+    if (res.ok) {
+      state.lemmaDict = await res.json();
+    }
+  } catch (err) {
+    console.warn("Failed to load lemma dict:", err);
+  }
+}
+
+function lemmatize(token) {
+  const normalized = normalizeWord(token);
+
+  // 1. Dictionary lookup (exact CLI parity for default book)
+  if (state.lemmaDict[normalized]) {
+    return state.lemmaDict[normalized];
+  }
+
+  // 2. Compromise fallback (for custom uploads)
+  if (typeof nlp !== "undefined") {
+    try {
+      const doc = nlp(token);
+      // Try verb infinitive
+      const verbForm = doc.verbs().toInfinitive().text();
+      if (verbForm) return normalizeWord(verbForm);
+      // Try noun singular
+      const nounForm = doc.nouns().toSingular().text();
+      if (nounForm) return normalizeWord(nounForm);
+      // Try adjective base form
+      const adjConj = doc.adjectives().conjugate();
+      if (adjConj && adjConj[0] && adjConj[0].adjective) {
+        return normalizeWord(adjConj[0].adjective);
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  // 3. Fallback to old rule-based system
+  return fallbackLemmatize(token);
+}
+
+function fallbackLemmatize(token) {
+  const candidates = deinflectionCandidates(normalizeWord(token));
+  let best = normalizeWord(token);
+  let score = -1e9;
+  for (const [cand, tag] of candidates) {
+    let s = 0;
+    if (state.model && state.model.vocabSet && state.model.vocabSet.has(cand)) s += 100;
+    if (tag === "identity") s += 5;
+    s -= 0.1 * Math.abs(cand.length - normalizeWord(token).length);
+    if (s > score) { score = s; best = cand; }
+  }
+  return best;
+}
+
 function contextualDeinflect(rawTokens, vocabSet) {
-  const normalized = rawTokens.map(normalizeWord);
-  return normalized.map((token, i) => {
-    const prev = i > 0 ? normalized[i - 1] : null;
-    const next = i + 1 < normalized.length ? normalized[i + 1] : null;
-    return pickContextualLemma(token, prev, next, vocabSet);
-  });
+  // vocabSet is kept for backward compatibility but not used
+  return rawTokens.map((token) => lemmatize(token));
 }
 
 function logit(p) { return Math.log(p / (1 - p)); }
@@ -1056,6 +1110,7 @@ async function main() {
   ui.statusText.textContent = `Loading model: ${state.profile.modelKey || MODEL_DEFAULT} ...`;
   await loadData(state.profile.modelKey || MODEL_DEFAULT);
   await loadDefaultBook();
+  await loadLemmaDict();
   ui.statusText.textContent = `Data loaded. Model: ${state.model.model_name || state.profile.modelKey}. Profile: ${state.currentNickname}.`;
 
   ui.questionCount.addEventListener("input", () => {
