@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Vocabulary Estimator · Basic Rasch</title>
+  <title>Vocabulary Reader Assistant</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
@@ -15,9 +15,9 @@
     <header class="hero">
       <p class="eyebrow">Vocabulary Reader Assistant</p>
       <h1>Estimate Before You Read</h1>
-      <p class="subtitle">This page estimates your vocabulary against one book, using a basic Rasch model with fixed workbook accuracy data.</p>
+      <p class="subtitle">Adaptive quiz + multiple models. Estimate your vocabulary against a book using the same estimators as the CLI.</p>
       <div class="hero-meta">
-        <span class="chip">Model: Basic Rasch</span>
+        <span class="chip">Default model: best_adaptive</span>
         <span class="chip">Book: The Hitchhiker's Guide to the Galaxy</span>
         <span class="chip">Static site, GitHub Pages ready</span>
         <button id="themeToggleBtn" class="chip chip-btn" type="button">Dark mode</button>
@@ -27,7 +27,7 @@
     <section class="panel controls">
       <div class="panel-head">
         <h2>Profile And Questionnaire</h2>
-        <p>Choose a nickname, set question count, then submit a known-word checklist.</p>
+        <p>Choose a nickname, model, quiz strategy, and question count. Then submit a known-word checklist.</p>
       </div>
       <div class="control-grid">
         <div class="field">
@@ -38,15 +38,41 @@
           </div>
         </div>
         <div class="field">
-          <label for="questionCount">Initial questions (10 to 50)</label>
+          <label for="modelSelect">Model</label>
+          <select id="modelSelect">
+            <option value="best_adaptive">best_adaptive (default)</option>
+            <option value="best_grouped_irt_model">best_grouped_irt_model</option>
+            <option value="best_high_budget">best_high_budget</option>
+            <option value="rasch">rasch</option>
+            <option value="twopl">twopl</option>
+            <option value="rasch_twopl_vote_user">rasch_twopl_vote_user</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="quizStrategy">Quiz strategy</label>
+          <select id="quizStrategy">
+            <option value="auto">auto (model-dependent)</option>
+            <option value="static">static (fixed, stratified)</option>
+            <option value="semirandom">semirandom (fixed + noise)</option>
+            <option value="adaptive_uncertainty">adaptive_uncertainty</option>
+            <option value="adaptive_uncertainty_light_random">adaptive_uncertainty_light_random</option>
+            <option value="adaptive_entropy">adaptive_entropy</option>
+            <option value="adaptive_stochastic_entropy">adaptive_stochastic_entropy</option>
+            <option value="adaptive_eer_fast">adaptive_eer_fast</option>
+            <option value="adaptive_hybrid_fast">adaptive_hybrid_fast</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="questionCount">Initial questions (10 to 200)</label>
           <div class="count-wrap">
-            <input id="questionCount" type="number" min="10" max="50" step="1" value="30" />
-            <output id="questionCountValue">30</output>
+            <input id="questionCount" type="number" min="10" max="200" step="1" value="100" />
+            <output id="questionCountValue">100</output>
           </div>
         </div>
       </div>
       <div class="actions controls-actions">
         <button id="startBtn" class="btn primary">Open checklist</button>
+        <button id="retakeBtn" class="btn warning">Retake test</button>
         <button id="resetBtn" class="btn danger">Reset profile</button>
       </div>
       <p id="statusText" class="status"></p>
@@ -60,6 +86,17 @@
       <div class="actions">
         <button id="submitChecklistBtn" class="btn success" type="button">Submit Answers</button>
       </div>
+    </section>
+
+    <section id="addWordsSection" class="panel hidden">
+      <p class="eyebrow">Manual labels</p>
+      <h2>Add or Update Words</h2>
+      <p class="subtitle">Enter words as <code>word=known</code> or <code>word=unknown</code>, one per line or comma-separated.</p>
+      <textarea id="addWordsTextarea" rows="5" placeholder="e.g.&#10;apple=known&#10;banana=unknown"></textarea>
+      <div class="actions">
+        <button id="submitAddWordsBtn" class="btn primary" type="button">Add labels</button>
+      </div>
+      <p id="addWordsStatus" class="status"></p>
     </section>
 
     <section id="resultsSection" class="hidden">
