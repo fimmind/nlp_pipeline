@@ -154,13 +154,24 @@ label {
   align-items: center;
 }
 
-input[type="text"] {
+input[type="text"],
+select,
+textarea {
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 10px 12px;
   font: inherit;
   color: var(--ink);
   background: var(--surface);
+}
+
+select {
+  cursor: pointer;
+}
+
+textarea {
+  width: 100%;
+  resize: vertical;
 }
 
 input[type="text"]:focus-visible,
@@ -220,6 +231,12 @@ input[type="number"] {
 .success {
   background: var(--success);
   color: var(--surface);
+}
+
+.warning {
+  background: transparent;
+  color: var(--ink);
+  border-color: var(--line);
 }
 
 .danger {
