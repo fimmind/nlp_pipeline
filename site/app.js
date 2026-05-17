@@ -375,13 +375,26 @@ function getQuizWordsAdaptiveUncertainty(questionCount, rng) {
   const candidateInfo = getCandidatePool();
   if (candidateInfo.length <= q) return candidateInfo.map((x) => x.word);
 
-  // Exclude already-answered words from the candidate pool
   const answered = new Set(Object.keys(state.profile.answers));
   let pool = candidateInfo.filter((x) => !answered.has(x.word));
-  if (pool.length < q) pool = candidateInfo; // fall back if too many answered
+  if (pool.length < q) pool = candidateInfo;
 
-  // Score by uncertainty = -|p - 0.5| (higher = more uncertain)
-  const scored = pool.map((x) => ({ ...x, score: -Math.abs(x.acc - 0.5) }));
+  const obsIds = [];
+  const obsLabels = [];
+  for (const w of Object.keys(state.profile.answers)) {
+    const idx = state.model.wordToIdx.get(w);
+    if (idx != null) {
+      obsIds.push(idx);
+      obsLabels.push(state.profile.answers[w]);
+    }
+  }
+  const theta = estimateTheta(obsIds, obsLabels);
+
+  // Score by posterior uncertainty = -|p_posterior - 0.5|
+  const scored = pool.map((x) => {
+    const p = predictProba(theta, x.idx);
+    return { ...x, score: -Math.abs(p - 0.5) };
+  });
   scored.sort((a, b) => b.score - a.score);
   return scored.slice(0, q).map((x) => x.word);
 }
@@ -395,7 +408,21 @@ function getQuizWordsAdaptiveUncertaintyLightRandom(questionCount, rng) {
   let pool = candidateInfo.filter((x) => !answered.has(x.word));
   if (pool.length < q) pool = candidateInfo;
 
-  const scored = pool.map((x) => ({ ...x, score: -Math.abs(x.acc - 0.5) }));
+  const obsIds = [];
+  const obsLabels = [];
+  for (const w of Object.keys(state.profile.answers)) {
+    const idx = state.model.wordToIdx.get(w);
+    if (idx != null) {
+      obsIds.push(idx);
+      obsLabels.push(state.profile.answers[w]);
+    }
+  }
+  const theta = estimateTheta(obsIds, obsLabels);
+
+  const scored = pool.map((x) => {
+    const p = predictProba(theta, x.idx);
+    return { ...x, score: -Math.abs(p - 0.5) };
+  });
   scored.sort((a, b) => b.score - a.score);
 
   const topK = 3;
@@ -423,7 +450,6 @@ function getQuizWordsAdaptiveUncertaintyLightRandom(questionCount, rng) {
     const removedPoolIndex = candidates[chosenIdx]._poolIndex;
     out.push(candidates[chosenIdx].word);
     available.splice(removedPoolIndex, 1);
-    // Re-index available for next iteration
     available.forEach((x, idx) => { x._poolIndex = idx; });
   }
 
@@ -450,7 +476,10 @@ function getQuizWordsAdaptiveEerFast(questionCount, rng) {
   }
   const theta = estimateTheta(obsIds, obsLabels);
 
-  const scoredPool = pool.map((x) => ({ ...x, uncertainty: -Math.abs(x.acc - 0.5) }));
+  const scoredPool = pool.map((x) => {
+    const p = predictProba(theta, x.idx);
+    return { ...x, uncertainty: -Math.abs(p - 0.5) };
+  });
   scoredPool.sort((a, b) => b.uncertainty - a.uncertainty);
   const evalPool = scoredPool.slice(0, 96);
   const candidatePool = scoredPool.slice(0, 48);
@@ -530,7 +559,21 @@ function getQuizWordsAdaptiveHybridFast(questionCount, rng) {
   let pool = candidateInfo.filter((x) => !answered.has(x.word));
   if (pool.length < q) pool = candidateInfo;
 
-  const scoredPool = pool.map((x) => ({ ...x, uncertainty: -Math.abs(x.acc - 0.5) }));
+  const obsIds = [];
+  const obsLabels = [];
+  for (const w of Object.keys(state.profile.answers)) {
+    const idx = state.model.wordToIdx.get(w);
+    if (idx != null) {
+      obsIds.push(idx);
+      obsLabels.push(state.profile.answers[w]);
+    }
+  }
+  const theta = estimateTheta(obsIds, obsLabels);
+
+  const scoredPool = pool.map((x) => {
+    const p = predictProba(theta, x.idx);
+    return { ...x, uncertainty: -Math.abs(p - 0.5) };
+  });
   scoredPool.sort((a, b) => b.uncertainty - a.uncertainty);
 
   const stage1Count = Math.min(30, q);
@@ -539,16 +582,6 @@ function getQuizWordsAdaptiveHybridFast(questionCount, rng) {
   let stage2 = [];
   if (q > stage1Count) {
     const remainingPool = scoredPool.slice(stage1Count);
-    const obsIds = [];
-    const obsLabels = [];
-    for (const w of Object.keys(state.profile.answers)) {
-      const idx = state.model.wordToIdx.get(w);
-      if (idx != null) {
-        obsIds.push(idx);
-        obsLabels.push(state.profile.answers[w]);
-      }
-    }
-    const theta = estimateTheta(obsIds, obsLabels);
 
     const evalPool = remainingPool.slice(0, 96);
     const candidatePool = remainingPool.slice(0, 48);
