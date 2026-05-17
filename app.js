@@ -5,6 +5,7 @@ const SENTENCE_RE = /[^.!?]+[.!?]+|[^.!?]+$/g;
 
 const MODEL_DEFAULT = "best_adaptive";
 const STRATEGY_DEFAULT = "static";
+const DEFAULT_BOOK_NAME = "The Hitchhiker's Guide to the Galaxy";
 
 const ui = {
   nicknameInput: document.getElementById("nicknameInput"),
@@ -31,6 +32,10 @@ const ui = {
   unknownList: document.getElementById("unknownList"),
   sentenceList: document.getElementById("sentenceList"),
   themeToggleBtn: document.getElementById("themeToggleBtn"),
+  bookUpload: document.getElementById("bookUpload"),
+  resetBookBtn: document.getElementById("resetBookBtn"),
+  bookName: document.getElementById("bookName"),
+  heroBookChip: document.getElementById("heroBookChip"),
 };
 
 const state = {
@@ -185,19 +190,63 @@ function initControls() {
 
 async function loadData(modelKey) {
   const filename = modelKey === "rasch" ? "rasch_model_data.json" : `${modelKey}_model_data.json`;
-  const [modelRes, bookRes] = await Promise.all([
-    fetch(`./data/${filename}`),
-    fetch("./data/hitchhikers_guide.txt"),
-  ]);
+  const modelRes = await fetch(`./data/${filename}`);
   if (!modelRes.ok) throw new Error(`Failed to load model data: ${modelRes.status}`);
   state.model = await modelRes.json();
-  state.bookText = await bookRes.text();
   state.model.wordToIdx = new Map(state.model.words.map((w, i) => [w, i]));
   state.model.vocabSet = new Set(state.model.words);
   state.model.b = state.model.accuracy.map((a) => {
     const p = a == null ? 0.5 : clip01(a);
     return -logit(p);
   });
+}
+
+async function loadDefaultBook() {
+  const bookRes = await fetch("./data/hitchhikers_guide.txt");
+  if (!bookRes.ok) throw new Error(`Failed to load book: ${bookRes.status}`);
+  state.bookText = await bookRes.text();
+}
+
+function setBookName(name) {
+  const text = `Current: ${name}`;
+  ui.bookName.textContent = text;
+  if (ui.heroBookChip) {
+    ui.heroBookChip.textContent = `Book: ${name}`;
+  }
+}
+
+function handleBookUpload(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  if (file.size > 10 * 1024 * 1024) {
+    ui.bookName.textContent = "Error: file too large (max 10 MB).";
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    state.bookText = e.target.result;
+    setBookName(file.name);
+    if (!ui.resultsSection.classList.contains("hidden")) {
+      runEstimation();
+    }
+  };
+  reader.onerror = () => {
+    ui.bookName.textContent = "Error reading file.";
+  };
+  reader.readAsText(file);
+}
+
+async function resetBook() {
+  setBookName("Loading default book...");
+  try {
+    await loadDefaultBook();
+    setBookName(DEFAULT_BOOK_NAME);
+    if (!ui.resultsSection.classList.contains("hidden")) {
+      runEstimation();
+    }
+  } catch (err) {
+    ui.bookName.textContent = `Error: ${err.message}`;
+  }
 }
 
 function hashStringToSeed(input) {
@@ -924,7 +973,6 @@ async function switchModel() {
   try {
     await loadData(modelKey);
     ui.statusText.textContent = `Model loaded: ${state.model.model_name || modelKey}. Profile: ${state.currentNickname}.`;
-    // Re-run estimation if results are visible
     if (!ui.resultsSection.classList.contains("hidden")) {
       runEstimation();
     }
@@ -968,6 +1016,7 @@ async function main() {
 
   ui.statusText.textContent = `Loading model: ${state.profile.modelKey || MODEL_DEFAULT} ...`;
   await loadData(state.profile.modelKey || MODEL_DEFAULT);
+  await loadDefaultBook();
   ui.statusText.textContent = `Data loaded. Model: ${state.model.model_name || state.profile.modelKey}. Profile: ${state.currentNickname}.`;
 
   ui.questionCount.addEventListener("input", () => {
@@ -988,6 +1037,12 @@ async function main() {
   ui.submitChecklistBtn.addEventListener("click", submitBatch);
   ui.resetBtn.addEventListener("click", resetProfile);
   ui.submitAddWordsBtn.addEventListener("click", submitAddWords);
+  if (ui.bookUpload) {
+    ui.bookUpload.addEventListener("change", handleBookUpload);
+  }
+  if (ui.resetBookBtn) {
+    ui.resetBookBtn.addEventListener("click", resetBook);
+  }
   if (ui.themeToggleBtn) {
     ui.themeToggleBtn.addEventListener("click", toggleTheme);
   }

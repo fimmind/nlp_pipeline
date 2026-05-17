@@ -18,7 +18,7 @@
       <p class="subtitle">Adaptive quiz + multiple models. Estimate your vocabulary against a book using the same estimators as the CLI.</p>
       <div class="hero-meta">
         <span class="chip">Default model: best_adaptive</span>
-        <span class="chip">Book: The Hitchhiker's Guide to the Galaxy</span>
+        <span class="chip" id="heroBookChip">Book: The Hitchhiker's Guide to the Galaxy</span>
         <span class="chip">Static site, GitHub Pages ready</span>
         <button id="themeToggleBtn" class="chip chip-btn" type="button">Dark mode</button>
       </div>
@@ -68,6 +68,14 @@
             <input id="questionCount" type="number" min="10" max="200" step="1" value="100" />
             <output id="questionCountValue">100</output>
           </div>
+        </div>
+        <div class="field">
+          <label for="bookUpload">Book (.txt)</label>
+          <div class="field-inline">
+            <input id="bookUpload" type="file" accept=".txt" />
+            <button id="resetBookBtn" class="btn" type="button">Reset to default</button>
+          </div>
+          <p id="bookName" class="meta">Current: The Hitchhiker's Guide to the Galaxy</p>
         </div>
       </div>
       <div class="actions controls-actions">
