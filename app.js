@@ -1,5 +1,4 @@
 const STORAGE_KEY = "vocab_book_profiles_v3";
-const THEME_KEY = "rasch_book_theme_v1";
 const WORD_RE = /[A-Za-z]+(?:['’][A-Za-z]+)?/g;
 const SENTENCE_RE = /[^.!?]+[.!?]+|[^.!?]+$/g;
 
@@ -33,11 +32,9 @@ const ui = {
   unknownList: document.getElementById("unknownList"),
   nameList: document.getElementById("nameList"),
   sentenceList: document.getElementById("sentenceList"),
-  themeToggleBtn: document.getElementById("themeToggleBtn"),
   bookUpload: document.getElementById("bookUpload"),
   resetBookBtn: document.getElementById("resetBookBtn"),
   bookName: document.getElementById("bookName"),
-  heroBookChip: document.getElementById("heroBookChip"),
   knownThreshold: document.getElementById("knownThreshold"),
   knownThresholdValue: document.getElementById("knownThresholdValue"),
 };
@@ -49,7 +46,6 @@ const state = {
   currentNickname: "default",
   profile: { answers: {}, questionCount: 100, modelKey: MODEL_DEFAULT, strategy: STRATEGY_DEFAULT, knownThreshold: 0.5 },
   quizWords: [],
-  theme: "light",
   currentBatch: 0,
   batchSize: 10,
   isAdaptiveQuiz: false,
@@ -318,29 +314,6 @@ function loadProfilesStore() {
   }
 }
 
-function loadTheme() {
-  const raw = localStorage.getItem(THEME_KEY);
-  if (raw === "dark" || raw === "light") return raw;
-  return "light";
-}
-
-function saveTheme(theme) {
-  localStorage.setItem(THEME_KEY, theme);
-}
-
-function applyTheme(theme) {
-  state.theme = theme === "dark" ? "dark" : "light";
-  document.documentElement.setAttribute("data-theme", state.theme);
-  if (ui.themeToggleBtn) {
-    ui.themeToggleBtn.textContent = state.theme === "dark" ? "Light mode" : "Dark mode";
-  }
-  saveTheme(state.theme);
-}
-
-function toggleTheme() {
-  applyTheme(state.theme === "dark" ? "light" : "dark");
-}
-
 function saveProfilesStore() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
     currentNickname: state.currentNickname,
@@ -399,9 +372,6 @@ async function loadDefaultBook() {
 function setBookName(name) {
   const text = `Current: ${name}`;
   ui.bookName.textContent = text;
-  if (ui.heroBookChip) {
-    ui.heroBookChip.textContent = `Book: ${name}`;
-  }
 }
 
 function handleBookUpload(event) {
@@ -1315,8 +1285,6 @@ function resetProfile() {
 }
 
 async function main() {
-  applyTheme(loadTheme());
-
   state.currentNickname = state.profiles.currentNickname || "default";
   ui.nicknameInput.value = state.currentNickname;
   loadCurrentProfile();
@@ -1364,9 +1332,6 @@ async function main() {
   }
   if (ui.resetBookBtn) {
     ui.resetBookBtn.addEventListener("click", resetBook);
-  }
-  if (ui.themeToggleBtn) {
-    ui.themeToggleBtn.addEventListener("click", toggleTheme);
   }
 }
 
