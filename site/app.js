@@ -16,7 +16,6 @@ const ui = {
   questionCount: document.getElementById("questionCount"),
   questionCountValue: document.getElementById("questionCountValue"),
   startBtn: document.getElementById("startBtn"),
-  retakeBtn: document.getElementById("retakeBtn"),
   showAnalysisBtn: document.getElementById("showAnalysisBtn"),
   resetBtn: document.getElementById("resetBtn"),
   statusText: document.getElementById("statusText"),
@@ -1163,17 +1162,6 @@ function submitBatch() {
   }
 }
 
-function retakeTest() {
-  state.profile.answers = {};
-  state.currentBatch = 0;
-  state.quizWords = [];
-  saveCurrentProfile();
-  ui.quizSection.classList.add("hidden");
-  ui.resultsSection.classList.add("hidden");
-  ui.addWordsSection.classList.add("hidden");
-  ui.statusText.textContent = `Profile '${state.currentNickname}' answers cleared. Click 'Open checklist' to retake.`;
-}
-
 function showSavedAnalysis() {
   if (!state.model) {
     ui.statusText.textContent = "Model is not loaded yet.";
@@ -1347,7 +1335,6 @@ async function main() {
     if (ev.key === "Enter") switchProfile();
   });
   ui.startBtn.addEventListener("click", startChecklist);
-  ui.retakeBtn.addEventListener("click", retakeTest);
   if (ui.showAnalysisBtn) {
     ui.showAnalysisBtn.addEventListener("click", showSavedAnalysis);
   }
