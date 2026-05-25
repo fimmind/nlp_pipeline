@@ -9,6 +9,8 @@ const DEFAULT_BOOK_NAME = "The Hitchhiker's Guide to the Galaxy";
 const ui = {
   nicknameInput: document.getElementById("nicknameInput"),
   loadProfileBtn: document.getElementById("loadProfileBtn"),
+  listProfilesBtn: document.getElementById("listProfilesBtn"),
+  profilesListText: document.getElementById("profilesListText"),
   modelSelect: document.getElementById("modelSelect"),
   quizStrategy: document.getElementById("quizStrategy"),
   questionCount: document.getElementById("questionCount"),
@@ -1264,10 +1266,30 @@ function switchProfile() {
   ui.nicknameInput.value = state.currentNickname;
   loadCurrentProfile();
   initControls();
+  if (ui.profilesListText) {
+    ui.profilesListText.textContent = "";
+    ui.profilesListText.classList.add("hidden");
+  }
   ui.statusText.textContent = `Using profile '${state.currentNickname}'. Saved answers: ${Object.keys(state.profile.answers).length}.`;
   ui.quizSection.classList.add("hidden");
   ui.resultsSection.classList.add("hidden");
   ui.addWordsSection.classList.add("hidden");
+}
+
+function listProfiles() {
+  const names = Object.keys(state.profiles.profiles).sort((a, b) => a.localeCompare(b));
+  if (names.length === 0) {
+    if (ui.profilesListText) {
+      ui.profilesListText.textContent = "No saved profiles found.";
+      ui.profilesListText.classList.remove("hidden");
+    }
+    return;
+  }
+  const decorated = names.map((name) => (name === state.currentNickname ? `${name} (current)` : name));
+  if (ui.profilesListText) {
+    ui.profilesListText.textContent = `Saved profiles (${names.length}): ${decorated.join(", ")}`;
+    ui.profilesListText.classList.remove("hidden");
+  }
 }
 
 function resetProfile() {
@@ -1318,6 +1340,9 @@ async function main() {
     saveCurrentProfile();
   });
   ui.loadProfileBtn.addEventListener("click", switchProfile);
+  if (ui.listProfilesBtn) {
+    ui.listProfilesBtn.addEventListener("click", listProfiles);
+  }
   ui.nicknameInput.addEventListener("keydown", (ev) => {
     if (ev.key === "Enter") switchProfile();
   });
