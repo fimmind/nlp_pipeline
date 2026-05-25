@@ -2,8 +2,8 @@ const STORAGE_KEY = "vocab_book_profiles_v3";
 const WORD_RE = /[A-Za-z]+(?:['’][A-Za-z]+)?/g;
 const SENTENCE_RE = /[^.!?]+[.!?]+|[^.!?]+$/g;
 
-const MODEL_DEFAULT = "best_adaptive";
-const STRATEGY_DEFAULT = "static";
+const MODEL_DEFAULT = "best_grouped_irt_model";
+const STRATEGY_DEFAULT = "adaptive_uncertainty_light_random";
 const DEFAULT_BOOK_NAME = "The Hitchhiker's Guide to the Galaxy";
 
 const ui = {
@@ -1271,6 +1271,8 @@ function switchProfile() {
 }
 
 function resetProfile() {
+  const confirmed = window.confirm(`Reset profile '${state.currentNickname}'? This will clear all saved answers for this profile.`);
+  if (!confirmed) return;
   state.profile = {
     answers: {},
     questionCount: Number(ui.questionCount.value) || 100,
