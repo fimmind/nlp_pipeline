@@ -16,6 +16,7 @@ const ui = {
   questionCountValue: document.getElementById("questionCountValue"),
   startBtn: document.getElementById("startBtn"),
   retakeBtn: document.getElementById("retakeBtn"),
+  showAnalysisBtn: document.getElementById("showAnalysisBtn"),
   resetBtn: document.getElementById("resetBtn"),
   statusText: document.getElementById("statusText"),
   quizSection: document.getElementById("quizSection"),
@@ -30,6 +31,7 @@ const ui = {
   estimateStats: document.getElementById("estimateStats"),
   knownList: document.getElementById("knownList"),
   unknownList: document.getElementById("unknownList"),
+  nameList: document.getElementById("nameList"),
   sentenceList: document.getElementById("sentenceList"),
   themeToggleBtn: document.getElementById("themeToggleBtn"),
   bookUpload: document.getElementById("bookUpload"),
@@ -57,6 +59,7 @@ const state = {
 };
 
 function normalizeWord(token) {
+  if (typeof token !== "string") return "";
   return token.toLowerCase().replaceAll("’", "'").replace(/^'+|'+$/g, "");
 }
 
@@ -65,48 +68,226 @@ function safeNickname(raw) {
   return out || "default";
 }
 
-function inferPosHint(prevToken, nextToken) {
-  const determiners = new Set(["a", "an", "the", "this", "that", "these", "those", "my", "your", "our", "his", "her", "their"]);
-  const beForms = new Set(["am", "is", "are", "was", "were", "be", "been", "being"]);
-  const pronouns = new Set(["i", "you", "he", "she", "we", "they", "it"]);
-  const auxiliaries = new Set(["do", "does", "did", "can", "could", "will", "would", "shall", "should", "may", "might", "must"]);
-  if (prevToken === "to") return "verb";
-  if (beForms.has(prevToken)) return "verb_participle";
-  if (determiners.has(prevToken)) return "noun";
-  if (pronouns.has(prevToken) || auxiliaries.has(prevToken)) return "verb";
-  if (nextToken === "of" || nextToken === "and" || nextToken === "or") return "noun";
-  return "any";
-}
+const WORD_TOKEN_RE = /^[A-Za-z]+(?:['’][A-Za-z]+)?$/;
+const NAME_LIKE_TOKEN_RE = /^[A-Z][A-Za-z]*(?:['’-][A-Za-z]+)*$/;
+const COMPROMISE_PROPER_TAGS = new Set([
+  "ProperNoun",
+  "Person",
+  "FirstName",
+  "LastName",
+  "MaleName",
+  "FemaleName",
+  "Place",
+  "City",
+  "Country",
+  "Region",
+  "Organization",
+  "Demonym",
+]);
+const TITLE_CASE_NOISE_TOKENS = new Set([
+  "a", "an", "and", "are", "as", "at", "be", "been", "being", "but", "by", "did", "do", "does", "first",
+  "for", "from", "had", "has", "have", "he", "her", "here", "him", "his", "how", "however", "i", "if",
+  "in", "is", "it", "its", "me", "my", "no", "not", "of", "oh", "on", "or", "our", "she", "so", "that",
+  "the", "their", "them", "then", "there", "these", "they", "this", "those", "to", "was", "we", "were",
+  "what", "when", "where", "which", "who", "why", "will", "with", "you", "your",
+]);
+const CALENDAR_WORD_EXCLUSIONS = new Set([
+  "monday", "mon", "tuesday", "tue", "tues", "wednesday", "wed", "thursday", "thu", "thur", "thurs",
+  "friday", "fri", "saturday", "sat", "sunday", "sun",
+  "january", "jan", "february", "feb", "march", "mar", "april", "apr", "may", "june", "jun", "july", "jul",
+  "august", "aug", "september", "sep", "sept", "october", "oct", "november", "nov", "december", "dec",
+]);
 
-function deinflectionCandidates(token) {
-  const out = [[token, "identity"]];
-  const add = (cand, tag) => { if (cand.length >= 2) out.push([cand, tag]); };
-  if (token.endsWith("ies") && token.length > 4) add(token.slice(0, -3) + "y", "noun_plural");
-  if (token.endsWith("es") && token.length > 3) add(token.slice(0, -2), "noun_plural");
-  if (token.endsWith("s") && token.length > 3 && !token.endsWith("ss")) add(token.slice(0, -1), "noun_plural");
-  if (token.endsWith("ied") && token.length > 4) add(token.slice(0, -3) + "y", "verb_past");
-  if (token.endsWith("ed") && token.length > 3) { add(token.slice(0, -2), "verb_past"); add(token.slice(0, -1), "verb_past"); }
-  if (token.endsWith("ing") && token.length > 5) { add(token.slice(0, -3), "verb_ing"); add(token.slice(0, -3) + "e", "verb_ing"); }
-  if (token.endsWith("er") && token.length > 4) add(token.slice(0, -2), "adj_comp");
-  if (token.endsWith("est") && token.length > 5) add(token.slice(0, -3), "adj_super");
+function orderedUnique(items) {
+  const out = [];
+  const seen = new Set();
+  for (const item of items) {
+    if (!item || seen.has(item)) continue;
+    seen.add(item);
+    out.push(item);
+  }
   return out;
 }
 
-function pickContextualLemma(token, prevToken, nextToken, vocabSet) {
-  const hint = inferPosHint(prevToken, nextToken);
-  let best = token;
-  let score = -1e9;
-  for (const [cand, tag] of deinflectionCandidates(token)) {
-    let s = 0;
-    if (vocabSet.has(cand)) s += 100;
-    if (tag === "identity") s += 5;
-    if (hint === "noun" && tag.startsWith("noun_")) s += 4;
-    if (hint === "verb" && tag.startsWith("verb_")) s += 4;
-    if (hint === "verb_participle" && tag === "verb_ing") s += 4;
-    s -= 0.1 * Math.abs(cand.length - token.length);
-    if (s > score) { score = s; best = cand; }
+function extractCompromiseTermTags(term) {
+  const raw = term && term.tags ? term.tags : null;
+  const normalizeTag = (tag) => String(tag || "").replace(/^#/, "").trim();
+  if (Array.isArray(raw)) {
+    return new Set(raw.map(normalizeTag).filter(Boolean));
   }
-  return best;
+  if (raw && typeof raw === "object") {
+    return new Set(Object.keys(raw).map(normalizeTag).filter(Boolean));
+  }
+  return new Set();
+}
+
+function isProperNounTag(termTags, rawToken, tokenPos) {
+  for (const tag of COMPROMISE_PROPER_TAGS) {
+    if (termTags.has(tag)) return true;
+  }
+  if (!WORD_TOKEN_RE.test(rawToken)) return false;
+  if (rawToken.toUpperCase() === rawToken) return false;
+  if (!/^[A-Z]/.test(rawToken)) return false;
+  const normalized = normalizeWord(rawToken).replace(/^'+|'+$/g, "");
+  if (!normalized) return false;
+  if (CALENDAR_WORD_EXCLUSIONS.has(normalized)) return false;
+  if (TITLE_CASE_NOISE_TOKENS.has(normalized)) return false;
+  if (tokenPos === 0 && normalized.length <= 2) return false;
+  return true;
+}
+
+function isNameLikeToken(rawToken) {
+  if (rawToken === "") return false;
+  if (rawToken.toUpperCase() === rawToken) return false;
+  if (NAME_LIKE_TOKEN_RE.test(rawToken) === false) return false;
+  const normalized = normalizeWord(rawToken).replace(/^'+|'+$/g, "");
+  if (normalized === "") return false;
+  if (CALENDAR_WORD_EXCLUSIONS.has(normalized)) return false;
+  if (TITLE_CASE_NOISE_TOKENS.has(normalized)) return false;
+  return true;
+}
+
+function tagSentenceTerms(sentence) {
+  const fallbackTerms = [...sentence.matchAll(WORD_RE)].map((m) => ({
+    raw: m[0],
+    normalized: normalizeWord(m[0]),
+    tags: new Set(),
+  }));
+  if (typeof nlp === "undefined") return fallbackTerms;
+  let terms;
+  try {
+    terms = nlp(sentence).terms().json();
+  } catch {
+    return fallbackTerms;
+  }
+  if (!Array.isArray(terms) || terms.length === 0) return fallbackTerms;
+  const out = [];
+  for (const termMatch of terms) {
+    const termNodes = Array.isArray(termMatch && termMatch.terms) && termMatch.terms.length > 0
+      ? termMatch.terms
+      : [termMatch];
+    for (const node of termNodes) {
+      const rawText = String(node && node.text ? node.text : "").trim();
+      if (!rawText) continue;
+      const tags = extractCompromiseTermTags(node);
+      const matches = [...rawText.matchAll(WORD_RE)];
+      for (const match of matches) {
+        if (!WORD_TOKEN_RE.test(match[0])) continue;
+        out.push({
+          raw: match[0],
+          normalized: normalizeWord(match[0]),
+          tags,
+        });
+      }
+    }
+  }
+  return out.length > 0 ? out : fallbackTerms;
+}
+
+function buildTaggedSentences(text) {
+  return splitSentences(text).map((sentence) => ({
+    sentence,
+    taggedTerms: tagSentenceTerms(sentence),
+  }));
+}
+
+function buildHighConfidenceProperNounLexicon(taggedSentences) {
+  const stats = new Map();
+  for (const sentence of taggedSentences) {
+    for (let i = 0; i < sentence.length; i += 1) {
+      const row = sentence[i];
+      const normalized = row.normalized;
+      if (!normalized) continue;
+      if (!stats.has(normalized)) {
+        stats.set(normalized, {
+          total: 0,
+          proper: 0,
+          sentenceInitialProper: 0,
+          lowercaseSeen: 0,
+          nameLikeProper: 0,
+        });
+      }
+      const agg = stats.get(normalized);
+      agg.total += 1;
+      if (row.raw.slice(0, 1).toLowerCase() === row.raw.slice(0, 1)) {
+        agg.lowercaseSeen += 1;
+      }
+      if (isProperNounTag(row.tags, row.raw, i)) {
+        agg.proper += 1;
+        if (i === 0) agg.sentenceInitialProper += 1;
+        if (isNameLikeToken(row.raw)) agg.nameLikeProper += 1;
+      }
+    }
+  }
+  const out = new Set();
+  for (const [normalized, row] of stats.entries()) {
+    if (CALENDAR_WORD_EXCLUSIONS.has(normalized)) continue;
+    if (row.proper < 2) continue;
+    if (row.total <= 0) continue;
+    if ((row.proper / row.total) < 0.60) continue;
+    if (row.nameLikeProper < 2) continue;
+    if (row.lowercaseSeen > 0) continue;
+    if (row.sentenceInitialProper === row.proper && row.proper < 5) continue;
+    out.add(normalized);
+  }
+  return out;
+}
+
+function makeLemmaCandidates(rawToken, termTags) {
+  const normalized = normalizeWord(rawToken);
+  if (!normalized) return [];
+  const candidates = [];
+  const addCandidate = (value) => {
+    if (typeof value !== "string") return;
+    const candidate = normalizeWord(value);
+    if (!candidate) return;
+    if (!WORD_TOKEN_RE.test(candidate)) return;
+    candidates.push(candidate);
+  };
+  if (state.lemmaDict[normalized]) addCandidate(state.lemmaDict[normalized]);
+  if (typeof nlp !== "undefined") {
+    try {
+      const doc = nlp(rawToken);
+      if (termTags.has("Verb")) {
+        addCandidate(doc.verbs().toInfinitive().text());
+      }
+      if (termTags.has("Noun")) {
+        addCandidate(doc.nouns().toSingular().text());
+      }
+      if (termTags.has("Adjective")) {
+        const adjConj = doc.adjectives().conjugate();
+        if (Array.isArray(adjConj) && adjConj.length > 0 && adjConj[0].adjective) {
+          addCandidate(adjConj[0].adjective);
+        }
+      }
+      addCandidate(doc.verbs().toInfinitive().text());
+      addCandidate(doc.nouns().toSingular().text());
+    } catch {
+      // Keep processing with the candidates already accumulated.
+    }
+  }
+  addCandidate(normalized);
+  return orderedUnique(candidates);
+}
+
+function contextualDeinflectTaggedTerms(taggedTerms, lowerToIdx, excludeProperNouns, properNounLexicon) {
+  const outTokens = [];
+  const outFlags = [];
+  for (let i = 0; i < taggedTerms.length; i += 1) {
+    const row = taggedTerms[i];
+    const token = row.normalized;
+    const tagProper = isProperNounTag(row.tags, row.raw, i);
+    const properByLexicon = properNounLexicon == null ? tagProper : (tagProper && properNounLexicon.has(token));
+    outFlags.push(properByLexicon);
+    if (properByLexicon && excludeProperNouns) {
+      outTokens.push("");
+      continue;
+    }
+    const candidates = makeLemmaCandidates(row.raw, row.tags);
+    const selected = candidates.find((candidate) => lowerToIdx.has(candidate)) || candidates[0] || token;
+    outTokens.push(selected);
+  }
+  return { tokens: outTokens, properFlags: outFlags };
 }
 
 async function loadLemmaDict() {
@@ -118,57 +299,6 @@ async function loadLemmaDict() {
   } catch (err) {
     console.warn("Failed to load lemma dict:", err);
   }
-}
-
-function lemmatize(token) {
-  const normalized = normalizeWord(token);
-
-  // 1. Dictionary lookup (exact CLI parity for default book)
-  if (state.lemmaDict[normalized]) {
-    return state.lemmaDict[normalized];
-  }
-
-  // 2. Compromise fallback (for custom uploads)
-  if (typeof nlp !== "undefined") {
-    try {
-      const doc = nlp(token);
-      // Try verb infinitive
-      const verbForm = doc.verbs().toInfinitive().text();
-      if (verbForm) return normalizeWord(verbForm);
-      // Try noun singular
-      const nounForm = doc.nouns().toSingular().text();
-      if (nounForm) return normalizeWord(nounForm);
-      // Try adjective base form
-      const adjConj = doc.adjectives().conjugate();
-      if (adjConj && adjConj[0] && adjConj[0].adjective) {
-        return normalizeWord(adjConj[0].adjective);
-      }
-    } catch (e) {
-      // ignore
-    }
-  }
-
-  // 3. Fallback to old rule-based system
-  return fallbackLemmatize(token);
-}
-
-function fallbackLemmatize(token) {
-  const candidates = deinflectionCandidates(normalizeWord(token));
-  let best = normalizeWord(token);
-  let score = -1e9;
-  for (const [cand, tag] of candidates) {
-    let s = 0;
-    if (state.model && state.model.vocabSet && state.model.vocabSet.has(cand)) s += 100;
-    if (tag === "identity") s += 5;
-    s -= 0.1 * Math.abs(cand.length - normalizeWord(token).length);
-    if (s > score) { score = s; best = cand; }
-  }
-  return best;
-}
-
-function contextualDeinflect(rawTokens, vocabSet) {
-  // vocabSet is kept for backward compatibility but not used
-  return rawTokens.map((token) => lemmatize(token));
 }
 
 function logit(p) { return Math.log(p / (1 - p)); }
@@ -801,17 +931,38 @@ function splitSentences(text) {
 }
 
 function analyzeBook(theta) {
-  const tokens = [...state.bookText.matchAll(WORD_RE)].map((m) => m[0]);
-  const lemmas = contextualDeinflect(tokens, state.model.vocabSet);
+  const taggedSentenceRows = buildTaggedSentences(state.bookText);
+  const taggedSentences = taggedSentenceRows.map((row) => row.taggedTerms);
+  const properNounLexicon = buildHighConfidenceProperNounLexicon(taggedSentences);
 
-  const tokenCount = lemmas.length;
   const tokenFreq = new Map();
   const inVocabWords = new Map();
-
-  for (const lemma of lemmas) {
-    tokenFreq.set(lemma, (tokenFreq.get(lemma) || 0) + 1);
-    const idx = state.model.wordToIdx.get(lemma);
-    if (idx != null) inVocabWords.set(lemma, idx);
+  let tokenCount = 0;
+  let properNounExcludedTokenCount = 0;
+  const nameTypeCounts = new Map();
+  for (const taggedTerms of taggedSentences) {
+    const { tokens, properFlags } = contextualDeinflectTaggedTerms(
+      taggedTerms,
+      state.model.wordToIdx,
+      true,
+      properNounLexicon,
+    );
+    for (let i = 0; i < tokens.length; i += 1) {
+      tokenCount += 1;
+      if (properFlags[i]) {
+        properNounExcludedTokenCount += 1;
+        const normalizedName = normalizeWord(taggedTerms[i].raw);
+        if (normalizedName) {
+          nameTypeCounts.set(normalizedName, (nameTypeCounts.get(normalizedName) || 0) + 1);
+        }
+        continue;
+      }
+      const lemma = tokens[i];
+      if (!lemma) continue;
+      tokenFreq.set(lemma, (tokenFreq.get(lemma) || 0) + 1);
+      const idx = state.model.wordToIdx.get(lemma);
+      if (idx != null) inVocabWords.set(lemma, idx);
+    }
   }
 
   let inVocabTokenCount = 0;
@@ -844,13 +995,20 @@ function analyzeBook(theta) {
   };
 
   const sentenceRows = [];
-  for (const sentence of splitSentences(state.bookText)) {
-    const raw = [...sentence.matchAll(WORD_RE)].map((m) => m[0]);
-    if (raw.length < 4 || raw.length > 35) continue;
-    const sentenceLemmas = contextualDeinflect(raw, state.model.vocabSet);
+  for (const sentenceRow of taggedSentenceRows) {
+    const sentence = sentenceRow.sentence;
+    const rawTokenCount = sentenceRow.taggedTerms.length;
+    if (rawTokenCount < 4 || rawTokenCount > 35) continue;
+    const { tokens: sentenceLemmas } = contextualDeinflectTaggedTerms(
+      sentenceRow.taggedTerms,
+      state.model.wordToIdx,
+      true,
+      properNounLexicon,
+    );
     const unknowns = [];
     let hasOov = false;
     for (const l of sentenceLemmas) {
+      if (!l) continue;
       const idx = state.model.wordToIdx.get(l);
       if (idx == null) { hasOov = true; break; }
       const { p } = effectiveWordBelief(theta, l, idx);
@@ -865,10 +1023,12 @@ function analyzeBook(theta) {
 
   return {
     tokenCount,
+    properNounExcludedTokenCount,
     inVocabTokenCount,
-    oovTokenCount: tokenCount - inVocabTokenCount,
+    oovTokenCount: tokenCount - properNounExcludedTokenCount - inVocabTokenCount,
     unknownTokenCount,
     unknownPct: inVocabTokenCount === 0 ? 0 : (100 * unknownTokenCount) / inVocabTokenCount,
+    detectedNames: sample([...nameTypeCounts.entries()].map(([word, count]) => ({ word, count })), 25),
     knownRows: sample(knownRows, 25),
     unknownRows: sample(unknownRows, 25),
     oneUnknownSentences: shuffledSentences,
@@ -876,8 +1036,10 @@ function analyzeBook(theta) {
 }
 
 function renderStats(a) {
+  const properPct = a.tokenCount === 0 ? 0 : (100 * a.properNounExcludedTokenCount) / a.tokenCount;
   const rows = [
     ["Word tokens analyzed", a.tokenCount],
+    ["Proper-noun tokens excluded from analysis", `${a.properNounExcludedTokenCount} (${properPct.toFixed(2)}%)`],
     ["In-vocabulary tokens used for estimates", a.inVocabTokenCount],
     ["Out-of-model-vocabulary tokens discarded", a.oovTokenCount],
     ["Estimated unknown in-vocabulary tokens", `${a.unknownTokenCount} (${a.unknownPct.toFixed(2)}%)`],
@@ -886,6 +1048,7 @@ function renderStats(a) {
 }
 
 function renderWordList(el, rows) {
+  if (!el) return;
   if (rows.length === 0) {
     el.innerHTML = `<p class="meta">No words found in this category.</p>`;
     return;
@@ -894,6 +1057,17 @@ function renderWordList(el, rows) {
     const source = r.observed ? "observed" : "model";
     return `<div class="word-item"><strong>${r.word}</strong><br><span class="meta">p_known=${r.p.toFixed(3)} · count=${r.count} · ${source}</span></div>`;
   }).join("");
+}
+
+function renderNameList(el, rows) {
+  if (!el) return;
+  if (rows.length === 0) {
+    el.innerHTML = `<p class="meta">No proper names were detected under current filters.</p>`;
+    return;
+  }
+  el.innerHTML = rows.map((r) => (
+    `<div class="word-item"><strong>${r.word}</strong><br><span class="meta">count=${r.count}</span></div>`
+  )).join("");
 }
 
 function renderSentences(rows) {
@@ -928,11 +1102,22 @@ function runEstimation() {
   renderStats(analysis);
   renderWordList(ui.knownList, analysis.knownRows);
   renderWordList(ui.unknownList, analysis.unknownRows);
+  renderNameList(ui.nameList, analysis.detectedNames);
   renderSentences(analysis.oneUnknownSentences);
 
   ui.resultsSection.classList.remove("hidden");
   ui.addWordsSection.classList.remove("hidden");
   ui.statusText.textContent = `Profile '${state.currentNickname}' ready. Model: ${state.profile.modelKey}. Strategy: ${state.profile.strategy}. Observed: ${ids.length}.`;
+}
+
+function runEstimationSafe() {
+  try {
+    runEstimation();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    ui.statusText.textContent = `Failed to run estimation: ${message}`;
+    console.error(err);
+  }
 }
 
 function startChecklist() {
@@ -998,7 +1183,10 @@ function submitBatch() {
   if (nextBatchStart < state.totalQuestionCount) {
     loadNextBatch();
   } else {
-    runEstimation();
+    ui.statusText.textContent = "Processing answers and analyzing book...";
+    setTimeout(() => {
+      runEstimationSafe();
+    }, 0);
   }
 }
 
@@ -1013,6 +1201,18 @@ function retakeTest() {
   ui.statusText.textContent = `Profile '${state.currentNickname}' answers cleared. Click 'Open checklist' to retake.`;
 }
 
+function showSavedAnalysis() {
+  if (!state.model) {
+    ui.statusText.textContent = "Model is not loaded yet.";
+    return;
+  }
+  if (!state.bookText) {
+    ui.statusText.textContent = "Book text is not loaded yet.";
+    return;
+  }
+  runEstimationSafe();
+}
+
 function parseAddWordsInput(raw) {
   const out = [];
   const lines = raw.split(/[\n,]+/);
@@ -1021,12 +1221,15 @@ function parseAddWordsInput(raw) {
     if (!trimmed) continue;
     const parts = trimmed.split("=");
     if (parts.length !== 2) continue;
-    const word = normalizeWord(parts[0]);
+    const rawWord = parts[0].trim();
+    const rawTokenMatch = rawWord.match(WORD_TOKEN_RE);
+    if (rawTokenMatch == null) continue;
+    const token = rawTokenMatch[0];
     const labelRaw = parts[1].trim().toLowerCase();
     let label = null;
     if (labelRaw === "known" || labelRaw === "1" || labelRaw === "y" || labelRaw === "yes" || labelRaw === "k") label = 1;
     if (labelRaw === "unknown" || labelRaw === "0" || labelRaw === "n" || labelRaw === "no" || labelRaw === "u") label = 0;
-    if (word && label !== null) out.push([word, label]);
+    if (token && label !== null) out.push([token, label]);
   }
   return out;
 }
@@ -1040,7 +1243,17 @@ function submitAddWords() {
   }
   let added = 0;
   let updated = 0;
-  for (const [word, label] of entries) {
+  let skippedProper = 0;
+  for (const [rawWord, label] of entries) {
+    const tagged = tagSentenceTerms(rawWord);
+    if (tagged.length === 0) continue;
+    const { tokens, properFlags } = contextualDeinflectTaggedTerms(tagged.slice(0, 1), state.model.wordToIdx, true, null);
+    if (properFlags[0]) {
+      skippedProper += 1;
+      continue;
+    }
+    const word = tokens[0];
+    if (!word) continue;
     if (!state.model.wordToIdx.has(word)) continue;
     if (Object.prototype.hasOwnProperty.call(state.profile.answers, word)) {
       updated++;
@@ -1050,11 +1263,12 @@ function submitAddWords() {
     state.profile.answers[word] = label;
   }
   saveCurrentProfile();
-  ui.addWordsStatus.textContent = `Added ${added} new label(s), updated ${updated}. Total observed: ${Object.keys(state.profile.answers).length}.`;
+  const properSuffix = skippedProper > 0 ? ` Skipped ${skippedProper} proper-noun entr${skippedProper === 1 ? "y" : "ies"}.` : "";
+  ui.addWordsStatus.textContent = `Added ${added} new label(s), updated ${updated}. Total observed: ${Object.keys(state.profile.answers).length}.${properSuffix}`;
   ui.addWordsTextarea.value = "";
   // Re-run estimation if results are visible
   if (!ui.resultsSection.classList.contains("hidden")) {
-    runEstimation();
+    runEstimationSafe();
   }
 }
 
@@ -1067,7 +1281,7 @@ async function switchModel() {
     await loadData(modelKey);
     ui.statusText.textContent = `Model loaded: ${state.model.model_name || modelKey}. Profile: ${state.currentNickname}.`;
     if (!ui.resultsSection.classList.contains("hidden")) {
-      runEstimation();
+      runEstimationSafe();
     }
   } catch (err) {
     ui.statusText.textContent = `Failed to load model ${modelKey}: ${err.message}`;
@@ -1123,7 +1337,7 @@ async function main() {
     state.profile.knownThreshold = t;
     saveCurrentProfile();
     if (!ui.resultsSection.classList.contains("hidden")) {
-      runEstimation();
+      runEstimationSafe();
     }
   });
 
@@ -1138,6 +1352,9 @@ async function main() {
   });
   ui.startBtn.addEventListener("click", startChecklist);
   ui.retakeBtn.addEventListener("click", retakeTest);
+  if (ui.showAnalysisBtn) {
+    ui.showAnalysisBtn.addEventListener("click", showSavedAnalysis);
+  }
   ui.submitChecklistBtn.addEventListener("click", submitBatch);
   ui.resetBtn.addEventListener("click", resetProfile);
   ui.submitAddWordsBtn.addEventListener("click", submitAddWords);
