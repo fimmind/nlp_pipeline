@@ -101,10 +101,19 @@ label {
 }
 
 .field-inline {
-  display: grid;
-  grid-template-columns: minmax(220px, 360px) auto;
+  display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   align-items: center;
+}
+
+.field-inline > input {
+  flex: 1 1 220px;
+  min-width: 220px;
+}
+
+.field-inline > .btn {
+  flex: 0 0 auto;
 }
 
 input[type="text"],
@@ -281,7 +290,11 @@ input[type="number"] {
 
 @media (max-width: 760px) {
   .page { padding: 22px 14px 60px; }
-  .field-inline,
+  .field-inline {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .field-inline > input { min-width: 0; width: 100%; }
   .count-wrap { grid-template-columns: 1fr; }
   #questionCountValue { text-align: left; }
 }
