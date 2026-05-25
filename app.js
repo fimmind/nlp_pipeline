@@ -1183,6 +1183,7 @@ function submitBatch() {
   if (nextBatchStart < state.totalQuestionCount) {
     loadNextBatch();
   } else {
+    ui.quizSection.classList.add("hidden");
     ui.statusText.textContent = "Processing answers and analyzing book...";
     setTimeout(() => {
       runEstimationSafe();
