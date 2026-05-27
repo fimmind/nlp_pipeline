@@ -55,7 +55,7 @@
             <span>Assistance preference</span>
             <select id="onboardingAssistInput">
               <option value="quiet">Quiet</option>
-              <option value="assisted">Assisted</option>
+              <option value="assisted" selected>Assisted</option>
               <option value="off">Off</option>
             </select>
           </label>
@@ -94,7 +94,7 @@
 
         <article class="summary-card">
           <p class="eyebrow">Reading support</p>
-          <p id="supportModeText" class="meta">Vocabulary assistance: Quiet</p>
+          <p id="supportModeText" class="meta">Vocabulary assistance: Assisted</p>
           <p id="supportLevelText" class="meta">Estimated support level: Not calibrated</p>
           <button id="goProfileBtn" class="btn" type="button">Profile and settings</button>
         </article>
@@ -155,8 +155,8 @@
         <div class="reader-topbar-right">
           <select id="assistModeSelect" aria-label="Assistance mode">
             <option value="off">Off</option>
-            <option value="quiet" selected>Quiet</option>
-            <option value="assisted">Assisted</option>
+            <option value="quiet">Quiet</option>
+            <option value="assisted" selected>Assisted</option>
           </select>
           <button id="prepareWordsBtn" class="btn" type="button">Prepare words</button>
           <button id="toggleAssistBtn" class="hidden" type="button">Assist</button>

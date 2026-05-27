@@ -383,6 +383,8 @@ input[type="text"] {
 
 .paragraph-row {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
   gap: 10px;
   border-bottom: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
   padding-bottom: 10px;
@@ -413,9 +415,35 @@ input[type="text"] {
 .assist-rail {
   border-left: 1px solid var(--border);
   padding-left: 14px;
-  display: grid;
-  align-content: start;
-  gap: 10px;
+  display: block;
+  align-self: start;
+  min-height: 100%;
+}
+
+.assist-rail h3 {
+  margin: 0 0 10px;
+}
+
+.assist-rail-track {
+  position: relative;
+  min-height: 100%;
+}
+
+.rail-group {
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+  padding-bottom: 10px;
+}
+
+.rail-group-anchored {
+  position: absolute;
+  left: 0;
+  right: 0;
+}
+
+.rail-label {
+  margin: 0 0 8px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
 }
 
 .word-card {
@@ -555,6 +583,7 @@ input[type="text"] {
   }
 
   .paragraph-row {
+    grid-template-columns: 1fr;
     padding-bottom: 12px;
   }
 }

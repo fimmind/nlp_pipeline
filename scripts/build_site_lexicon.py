@@ -9,13 +9,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from wordfreq import zipf_frequency
+from nltk.corpus import wordnet as wn
 
 
 @dataclass(frozen=True)
 class LexiconEntry:
     word: str
     ipa: str
+    pos: str
     definition: str
 
 
@@ -28,21 +29,25 @@ def _normalize_word(token: str) -> str:
     return token.strip().lower().replace("’", "'")
 
 
-def _estimate_level(zipf: float) -> str:
-    if zipf >= 6.0:
-        return "very common"
-    if zipf >= 5.0:
-        return "common"
-    if zipf >= 4.0:
-        return "mid-frequency"
-    if zipf >= 3.0:
-        return "less common"
-    return "rare"
+def _wordnet_pos_label(pos: str) -> str:
+    labels = {
+        "n": "noun",
+        "v": "verb",
+        "a": "adjective",
+        "s": "adjective",
+        "r": "adverb",
+    }
+    return labels.get(pos, "")
 
 
-def _build_generated_definition(word: str, zipf: float) -> str:
-    level = _estimate_level(zipf)
-    return f"{word}: {level} English vocabulary item in this reader's quiz/model lexicon."
+def _wordnet_entry(word: str) -> tuple[str, str]:
+    synsets = wn.synsets(word)
+    if len(synsets) == 0:
+        return "", ""
+    syn = synsets[0]
+    pos = _wordnet_pos_label(syn.pos())
+    definition = str(syn.definition() or "").strip()
+    return pos, definition
 
 
 def _build_entries(model_words: list[str], overrides: dict[str, dict[str, str]]) -> list[LexiconEntry]:
@@ -54,12 +59,18 @@ def _build_entries(model_words: list[str], overrides: dict[str, dict[str, str]])
         override = overrides.get(word, {})
         definition = str(override.get("definition", "")).strip()
         ipa = str(override.get("ipa", "")).strip()
+        pos = str(override.get("pos", "")).strip()
         if definition == "":
-            zipf = float(zipf_frequency(word, "en", wordlist="best"))
-            definition = _build_generated_definition(word=word, zipf=zipf)
+            wn_pos, wn_definition = _wordnet_entry(word=word)
+            if wn_definition != "":
+                definition = wn_definition
+            if pos == "":
+                pos = wn_pos
+        if definition == "":
+            definition = "Definition unavailable in this build."
         if ipa == "":
             ipa = f"/{word}/"
-        out.append(LexiconEntry(word=word, ipa=ipa, definition=definition))
+        out.append(LexiconEntry(word=word, ipa=ipa, pos=pos, definition=definition))
     return out
 
 
@@ -70,7 +81,7 @@ def _chunk_entries(entries: list[LexiconEntry]) -> dict[str, list[dict[str, str]
         key = key if ("a" <= key <= "z") else "_"
         if key not in buckets:
             buckets[key] = []
-        buckets[key].append({"word": row.word, "ipa": row.ipa, "definition": row.definition})
+        buckets[key].append({"word": row.word, "ipa": row.ipa, "pos": row.pos, "definition": row.definition})
     for key in buckets:
         buckets[key].sort(key=lambda x: x["word"])
     return buckets
@@ -101,7 +112,7 @@ def build_site_lexicon(site_data_dir: Path) -> None:
     entries = _build_entries(model_words=[str(w) for w in words], overrides=overrides_payload)
     entries.sort(key=lambda x: x.word)
 
-    full_payload = [{"word": x.word, "ipa": x.ipa, "definition": x.definition} for x in entries]
+    full_payload = [{"word": x.word, "ipa": x.ipa, "pos": x.pos, "definition": x.definition} for x in entries]
     full_path = site_data_dir / "lexicon_full.json"
     with full_path.open("w", encoding="utf-8") as handle:
         json.dump(full_payload, handle, ensure_ascii=False)

@@ -119,13 +119,14 @@ const state = {
   books: [],
   currentBookId: "",
   currentChapterIdx: 0,
-  assistMode: "quiet",
+  assistMode: "assisted",
   quizWords: [],
   quizBatchSize: 10,
   quizBatchIndex: 0,
   lexiconEntries: new Map(),
   onboardingStep: "welcome",
   readerLookupWord: "",
+  readerLookupParagraphIdx: -1,
 };
 
 function normalizeWord(token) {
@@ -331,13 +332,13 @@ function loadUiPrefs() {
     const raw = localStorage.getItem(UI_STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      state.assistMode = ["off", "quiet", "assisted"].includes(parsed.assistMode) ? parsed.assistMode : "quiet";
+      state.assistMode = ["off", "quiet", "assisted"].includes(parsed.assistMode) ? parsed.assistMode : "assisted";
       return;
     }
     const legacyRaw = localStorage.getItem(LEGACY_UI_STORAGE_KEY);
     if (!legacyRaw) return;
     const legacyParsed = JSON.parse(legacyRaw);
-    state.assistMode = legacyParsed.assistEnabled === false ? "off" : "quiet";
+    state.assistMode = legacyParsed.assistEnabled === false ? "off" : "assisted";
   } catch {
     // ignore
   }
@@ -356,7 +357,7 @@ function ensureProfile(name) {
       settings: {
         knownThreshold: DEFAULT_THRESHOLD,
         quizSize: DEFAULT_QUIZ_SIZE,
-        assistanceMode: "quiet",
+        assistanceMode: "assisted",
         definitionLanguage: "en",
         showTranslations: false,
         showDefinitions: true,
@@ -374,7 +375,7 @@ function ensureProfile(name) {
   state.profiles.current = name;
   state.activeProfile = state.profiles.items[name];
   if (!state.activeProfile.settings) state.activeProfile.settings = {};
-  if (!state.activeProfile.settings.assistanceMode) state.activeProfile.settings.assistanceMode = "quiet";
+  if (!state.activeProfile.settings.assistanceMode) state.activeProfile.settings.assistanceMode = "assisted";
   state.assistMode = state.activeProfile.settings.assistanceMode;
   applyReaderSettings(state.activeProfile.settings);
   saveProfilesStore();
@@ -841,6 +842,7 @@ function getLexiconEntry(word) {
     return {
       word,
       ipa: typeof row.ipa === "string" && row.ipa.trim() ? row.ipa.trim() : `/${word}/`,
+      pos: typeof row.pos === "string" ? row.pos.trim() : "",
       definition: typeof row.definition === "string" && row.definition.trim()
         ? row.definition.trim()
         : "Definition unavailable in this build.",
@@ -849,6 +851,7 @@ function getLexiconEntry(word) {
   return {
     word,
     ipa: `/${word}/`,
+    pos: "",
     definition: "Definition unavailable in this build.",
   };
 }
@@ -922,7 +925,7 @@ function renderProfiles() {
     ui.homeProfileName.textContent = activeName || "No active profile";
     applyReaderSettings(state.activeProfile.settings);
   } else {
-    ui.supportModeText.textContent = "Vocabulary assistance: Quiet";
+    ui.supportModeText.textContent = "Vocabulary assistance: Assisted";
     ui.supportLevelText.textContent = "Estimated support level: Not calibrated";
     ui.homeProfileName.textContent = "No active profile";
   }
@@ -1006,10 +1009,12 @@ function renderReader() {
 
   const { unknown, theta, threshold } = computeUnknownSet(book);
   const properLexicon = buildHighConfidenceProperNounLexicon(chapter.paragraphs.map((p) => tagSentenceTerms(p)));
-  const railCards = [];
-  const renderWordCard = (word, sourceParagraph, sentenceExample) => {
+  const useSidePanel = window.matchMedia("(min-width: 981px)").matches;
+  const sidePanelCards = [];
+  const renderWordCard = (word, sourceParagraph) => {
     const entry = getLexiconEntry(word);
-    return `<article class="word-card"><h4>${entry.word}</h4><div class="ipa">${entry.ipa || "[N/A]"}</div><p>${escapeHtml(entry.definition)}</p>${sentenceExample ? `<p>Example: ${escapeHtml(sentenceExample)}</p>` : ""}<div class="actions"><button class="btn" data-mark-word="${word}" data-mark-label="1" data-source="${sourceParagraph}" type="button">Known</button><button class="btn" data-mark-word="${word}" data-mark-label="0" data-source="${sourceParagraph}" type="button">Still unknown</button></div></article>`;
+    const meta = [entry.ipa || "[N/A]", entry.pos || ""].filter((x) => x !== "").join(" · ");
+    return `<article class="word-card"><h4>${entry.word}</h4><div class="ipa">${escapeHtml(meta)}</div><p>${escapeHtml(entry.definition)}</p><div class="actions"><button class="btn" data-mark-word="${word}" data-mark-label="1" data-source="${sourceParagraph}" type="button">Known</button><button class="btn" data-mark-word="${word}" data-mark-label="0" data-source="${sourceParagraph}" type="button">Still unknown</button></div></article>`;
   };
   const escapeRegex = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const renderParagraphText = (paragraph, highlightWords) => {
@@ -1053,23 +1058,55 @@ function renderReader() {
     const paragraphText = renderParagraphText(paragraph, highlightWords);
     let cards = "";
     if (state.assistMode === "assisted") {
-      cards = ranked.map(({ word }) => renderWordCard(word, `para_${idx}`, paragraph)).join("");
-      cards && railCards.push(cards);
+      const cardsHtml = ranked.map(({ word }) => renderWordCard(word, `para_${idx}`)).join("");
+      if (useSidePanel) {
+        if (cardsHtml) {
+          sidePanelCards.push({
+            paragraphIdx: idx,
+            cardsHtml,
+          });
+        }
+      } else {
+        cards = cardsHtml;
+      }
     } else if (state.assistMode === "quiet" && state.readerLookupWord) {
       const selected = ranked.find((row) => row.word === state.readerLookupWord);
-      if (selected) cards = renderWordCard(selected.word, `para_${idx}`, paragraph);
+      const sameParagraph = state.readerLookupParagraphIdx === idx;
+      if (selected && sameParagraph) {
+        const selectedCard = renderWordCard(selected.word, `para_${idx}`);
+        if (useSidePanel) {
+          sidePanelCards.push({
+            paragraphIdx: idx,
+            cardsHtml: selectedCard,
+          });
+        } else {
+          cards = selectedCard;
+        }
+      }
     }
 
-    return `<div class="paragraph-row"><div class="paragraph-text">${paragraphText}</div><div class="assist-col">${cards}</div></div>`;
+    return `<div class="paragraph-row" data-paragraph-idx="${idx}"><div class="paragraph-text">${paragraphText}</div>${cards ? `<div class="assist-col">${cards}</div>` : ""}</div>`;
   }).join("");
 
-  if (state.assistMode === "assisted" && railCards.length > 0) {
-    ui.readerSuggestions.innerHTML = `<h3>Assistance</h3>${railCards.join("")}`;
+  if (state.assistMode === "assisted") {
+    state.readerLookupWord = "";
+    state.readerLookupParagraphIdx = -1;
+  }
+
+  if (useSidePanel && sidePanelCards.length > 0) {
+    ui.readerSuggestions.innerHTML = `<h3>Definitions</h3><div class="assist-rail-track" data-assist-rail-track></div>`;
+    const railTrack = ui.readerSuggestions.querySelector("[data-assist-rail-track]");
+    if (railTrack) {
+      railTrack.innerHTML = sidePanelCards.map((item) => `
+        <section class="rail-group rail-group-anchored" data-paragraph-idx="${item.paragraphIdx}">
+          <p class="rail-label">Paragraph ${item.paragraphIdx + 1}</p>
+          ${item.cardsHtml}
+        </section>
+      `).join("");
+    }
     ui.readerSuggestions.classList.remove("hidden");
-  } else if (state.assistMode === "quiet" && state.readerLookupWord) {
-    const entry = getLexiconEntry(state.readerLookupWord);
-    ui.readerSuggestions.innerHTML = `<h3>Lookup</h3>${renderWordCard(entry.word, "lookup", "")}`;
-    ui.readerSuggestions.classList.remove("hidden");
+    layoutAssistRailCards();
+    requestAnimationFrame(() => layoutAssistRailCards());
   } else {
     ui.readerSuggestions.innerHTML = "";
     ui.readerSuggestions.classList.add("hidden");
@@ -1079,6 +1116,8 @@ function renderReader() {
     node.addEventListener("click", () => {
       if (state.assistMode !== "quiet") return;
       state.readerLookupWord = normalizeWord(node.getAttribute("data-lookup-word"));
+      const row = node.closest("[data-paragraph-idx]");
+      state.readerLookupParagraphIdx = row ? Number(row.getAttribute("data-paragraph-idx")) : -1;
       renderReader();
     });
   });
@@ -1103,6 +1142,32 @@ function renderReader() {
       ui.statusText.textContent = `Updated '${word}' as ${label === 1 ? "known" : "unknown"}.`;
     });
   });
+}
+
+function layoutAssistRailCards() {
+  const railTrack = ui.readerSuggestions.querySelector("[data-assist-rail-track]");
+  if (!railTrack) return;
+  const groups = [...railTrack.querySelectorAll(".rail-group-anchored[data-paragraph-idx]")];
+  if (groups.length === 0) {
+    railTrack.style.height = "0px";
+    return;
+  }
+  const paragraphRows = [...ui.readerParagraphs.querySelectorAll(".paragraph-row[data-paragraph-idx]")];
+  const rowsByIdx = new Map(paragraphRows.map((row) => [Number(row.getAttribute("data-paragraph-idx")), row]));
+  const trackRect = railTrack.getBoundingClientRect();
+  const verticalGap = 10;
+  let currentBottom = -verticalGap;
+  for (const group of groups) {
+    const paragraphIdx = Number(group.getAttribute("data-paragraph-idx"));
+    const row = rowsByIdx.get(paragraphIdx);
+    if (!row) continue;
+    const rowRect = row.getBoundingClientRect();
+    const paragraphTop = Math.max(0, rowRect.top - trackRect.top);
+    const top = Math.max(paragraphTop, currentBottom + verticalGap);
+    group.style.top = `${top}px`;
+    currentBottom = top + group.offsetHeight;
+  }
+  railTrack.style.height = `${Math.max(ui.readerParagraphs.offsetHeight, currentBottom)}px`;
 }
 
 function openBook(bookId) {
@@ -1405,6 +1470,7 @@ async function loadLexicon() {
       if (!state.lexiconEntries.has(word)) {
         state.lexiconEntries.set(word, {
           ipa: typeof row.ipa === "string" ? row.ipa : "",
+          pos: typeof row.pos === "string" ? row.pos : "",
           definition: typeof row.definition === "string" ? row.definition : "",
         });
       }
@@ -1580,7 +1646,7 @@ function bindEvents() {
     ensureProfile(name);
     const selectedMode = ui.onboardingAssistInput.value;
     const language = String(ui.onboardingLanguageInput.value || "en").trim().toLowerCase();
-    state.activeProfile.settings.assistanceMode = ["off", "quiet", "assisted"].includes(selectedMode) ? selectedMode : "quiet";
+    state.activeProfile.settings.assistanceMode = ["off", "quiet", "assisted"].includes(selectedMode) ? selectedMode : "assisted";
     state.activeProfile.settings.definitionLanguage = language || "en";
     state.assistMode = state.activeProfile.settings.assistanceMode;
     saveProfilesStore();
@@ -1615,6 +1681,10 @@ function bindEvents() {
     } catch (err) {
       ui.statusText.textContent = `Import failed: ${err.message}`;
     }
+  });
+
+  window.addEventListener("resize", () => {
+    layoutAssistRailCards();
   });
 }
 
