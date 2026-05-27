@@ -24,35 +24,49 @@
 
     <section id="onboardingBanner" class="hidden" aria-live="polite"></section>
 
-    <section id="libraryView" class="library-screen">
+    <section id="libraryView" class="screen library-screen">
       <div id="libraryList" class="book-list" aria-live="polite"></div>
+      <article id="librarySuggestions" class="suggestions hidden"></article>
     </section>
 
-    <section id="librarySuggestions" class="hidden"></section>
-    <p id="profilesText" class="hidden"></p>
-    <p id="statusText" class="hidden"></p>
+    <section id="readerView" class="screen reader-screen hidden">
+      <header class="reader-header">
+        <button id="goLibraryBtn" class="btn" type="button">Back to library</button>
+        <h2 id="readerBookTitle">No book open</h2>
+      </header>
+      <div class="reader-controls">
+        <p id="readerChapterTitle"></p>
+        <div class="reader-actions">
+          <button id="suggestRemainingBtn" class="btn" type="button">Suggest from here</button>
+          <button id="suggestNextBtn" class="btn" type="button">Suggest next chapter</button>
+          <button id="suggestWholeReaderBtn" class="btn" type="button">Suggest whole book</button>
+          <button id="toggleAssistBtn" class="btn" type="button">Assist: on</button>
+        </div>
+      </div>
+      <nav id="chapterNav" class="chapter-nav" aria-label="Chapter navigation"></nav>
+      <div id="readerParagraphs" class="reader-paragraphs"></div>
+      <article id="readerSuggestions" class="suggestions hidden"></article>
+    </section>
 
-    <section id="profileView" class="hidden"></section>
-    <section id="readerView" class="hidden"></section>
-    <article id="readerSuggestions" class="hidden"></article>
-    <div id="chapterNav" class="hidden"></div>
-    <h2 id="readerBookTitle" class="hidden">No book open</h2>
-    <p id="readerChapterTitle" class="hidden"></p>
-    <div id="readerParagraphs" class="hidden"></div>
-    <button id="suggestRemainingBtn" class="hidden" type="button">Suggest</button>
-    <button id="toggleAssistBtn" class="hidden" type="button">Assist</button>
-    <button id="goLibraryBtn" class="hidden" type="button">Library</button>
+    <section id="profileView" class="screen profile-screen hidden">
+      <p id="profilesText"></p>
+      <div class="profile-row">
+        <label for="quizCountInput">Quiz size</label>
+        <input id="quizCountInput" type="number" min="20" max="200" step="1" value="60" />
+        <button id="exportProfileBtn" class="btn" type="button">Export profile</button>
+        <label for="importProfileInput" class="btn">Import profile</label>
+        <input id="importProfileInput" class="file-input" type="file" accept="application/json" />
+      </div>
+      <section id="quizSection" class="quiz-section hidden">
+        <p id="quizProgress"></p>
+        <div id="checklistWrap"></div>
+        <button id="submitChecklistBtn" class="btn" type="button">Next Batch</button>
+      </section>
+    </section>
+
+    <p id="statusText" class="status" aria-live="polite"></p>
     <button id="goReaderBtn" class="hidden" type="button">Reader</button>
     <button id="goProfileBtn" class="hidden" type="button">Profile</button>
-    <input id="quizCountInput" class="hidden" type="number" min="20" max="200" step="1" value="60" />
-    <button id="exportProfileBtn" class="hidden" type="button">Export</button>
-    <label for="importProfileInput" class="hidden">Import</label>
-    <input id="importProfileInput" class="hidden" type="file" accept="application/json" />
-    <section id="quizSection" class="hidden">
-      <p id="quizProgress"></p>
-      <div id="checklistWrap"></div>
-      <button id="submitChecklistBtn" type="button">Next Batch</button>
-    </section>
   </main>
 
   <script src="https://unpkg.com/compromise@14.15.0/builds/compromise.min.js"></script>

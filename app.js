@@ -46,6 +46,8 @@ const ui = {
   readerChapterTitle: document.getElementById("readerChapterTitle"),
   readerParagraphs: document.getElementById("readerParagraphs"),
   suggestRemainingBtn: document.getElementById("suggestRemainingBtn"),
+  suggestNextBtn: document.getElementById("suggestNextBtn"),
+  suggestWholeReaderBtn: document.getElementById("suggestWholeReaderBtn"),
   toggleAssistBtn: document.getElementById("toggleAssistBtn"),
   readerSuggestions: document.getElementById("readerSuggestions"),
 
@@ -742,12 +744,19 @@ function renderView(name) {
 
 function renderOnboardingBanner() {
   const observedCount = Object.keys(state.activeProfile.observed).length;
-  if (observedCount > 0) {
+  const profileCount = Object.keys(state.profiles.items).length;
+  if (observedCount > 0 && profileCount > 1) {
     ui.onboardingBanner.classList.add("hidden");
     return;
   }
-  ui.onboardingBanner.innerHTML = `<div class=\"notice-head\"><strong>Start with the quiz</strong></div><p class=\"notice-copy\">This profile has no observed words yet. Take the calibration quiz for stronger reading assistance.</p><div class=\"notice-actions\"><button id=\"bannerTakeQuizBtn\" class=\"btn\" type=\"button\">Take quiz</button></div>`;
+  ui.onboardingBanner.innerHTML = `<p class=\"notice-head\"><strong>Start with the quiz</strong></p><p class=\"notice-copy\">First-time setup: enter a profile name, click Use profile, then take the initial quiz for accurate reading assistance.</p><div class=\"notice-actions\"><button id=\"bannerUseProfileBtn\" class=\"btn\" type=\"button\">Use current name</button><button id=\"bannerTakeQuizBtn\" class=\"btn\" type=\"button\">Take quiz</button></div>`;
   ui.onboardingBanner.classList.remove("hidden");
+  document.getElementById("bannerUseProfileBtn").addEventListener("click", () => {
+    const name = safeNickname(ui.profileNameInput.value || state.profiles.current);
+    ensureProfile(name);
+    renderProfiles();
+    ui.statusText.textContent = `Using profile: ${name}.`;
+  });
   document.getElementById("bannerTakeQuizBtn").addEventListener("click", () => {
     renderView("profile");
     startQuizFlow();
@@ -774,14 +783,12 @@ function renderLibrary() {
       </div>
       <div class="actions">
         <button class="btn" data-open-book="${book.id}" type="button">Open</button>
-        <button class="btn" data-suggest-book="${book.id}" type="button">Suggest Whole Book</button>
         <button class="btn danger" data-delete-book="${book.id}" type="button">Delete</button>
       </div>
     </div>
   `).join("");
 
   ui.libraryList.querySelectorAll("[data-open-book]").forEach((btn) => btn.addEventListener("click", () => openBook(btn.getAttribute("data-open-book"))));
-  ui.libraryList.querySelectorAll("[data-suggest-book]").forEach((btn) => btn.addEventListener("click", () => suggestWholeBook(btn.getAttribute("data-suggest-book"))));
   ui.libraryList.querySelectorAll("[data-delete-book]").forEach((btn) => btn.addEventListener("click", () => deleteBook(btn.getAttribute("data-delete-book"))));
 }
 
@@ -798,6 +805,7 @@ function renderReader() {
   const chapter = book.chapters[state.currentChapterIdx] || book.chapters[0];
   ui.readerBookTitle.textContent = book.title;
   ui.readerChapterTitle.textContent = chapter.title;
+  ui.toggleAssistBtn.textContent = `Assist: ${state.assistEnabled ? "on" : "off"}`;
 
   ui.chapterNav.innerHTML = book.chapters.map((c, idx) => `<button class="chapter-btn ${idx === state.currentChapterIdx ? "active" : ""}" data-chapter-idx="${idx}" type="button">${escapeHtml(c.title)}</button>`).join("");
   ui.chapterNav.querySelectorAll("[data-chapter-idx]").forEach((btn) => {
@@ -815,13 +823,14 @@ function renderReader() {
     const deinflected = contextualDeinflectTaggedTerms(tagged, state.model.wordToIdx, true, properLexicon).tokens;
     const unknownWords = [...new Set(deinflected.filter((w) => w && unknown.has(w)))];
 
+    const maxCards = window.matchMedia("(min-width: 981px)").matches ? 3 : 2;
     const ranked = unknownWords.map((word) => {
       const freq = deinflected.filter((x) => x === word).length;
       const idxWord = state.model.wordToIdx.get(word);
       const { p } = effectiveWordBelief(theta, word, idxWord);
       const importance = 0.7 * freq + 0.3 * (1 - p) / Math.max(1e-6, 1 - threshold);
       return { word, importance };
-    }).sort((a, b) => b.importance - a.importance).slice(0, 2);
+    }).sort((a, b) => b.importance - a.importance).slice(0, maxCards);
 
     const cards = state.assistEnabled ? ranked.map(({ word }) => {
       const entry = getLexiconEntry(word);
@@ -857,6 +866,12 @@ function getCurrentChapterRemainingText(book) {
   return chapter.paragraphs.join("\n\n");
 }
 
+function getNextChapterText(book) {
+  const chapter = book.chapters[state.currentChapterIdx + 1];
+  if (!chapter) return "";
+  return chapter.paragraphs.join("\n\n");
+}
+
 function suggestRemaining() {
   const book = state.books.find((b) => b.id === state.currentBookId);
   if (!book) {
@@ -869,6 +884,23 @@ function suggestRemaining() {
   renderSuggestions(ui.readerSuggestions, "Suggestions For Remaining Chapter", rows);
 }
 
+function suggestNextChapter() {
+  const book = state.books.find((b) => b.id === state.currentBookId);
+  if (!book) {
+    ui.statusText.textContent = "Open a book first.";
+    return;
+  }
+  const text = getNextChapterText(book);
+  if (!text) {
+    ui.statusText.textContent = "No next chapter available.";
+    return;
+  }
+  const { unknown } = computeUnknownSet(book);
+  const rows = analyzeScopeText(text, unknown);
+  const nextTitle = book.chapters[state.currentChapterIdx + 1].title;
+  renderSuggestions(ui.readerSuggestions, `Suggestions For Next Chapter: ${nextTitle}`, rows);
+}
+
 function suggestWholeBook(bookId) {
   const book = state.books.find((b) => b.id === bookId);
   if (!book) return;
@@ -876,6 +908,19 @@ function suggestWholeBook(bookId) {
   const text = book.chapters.map((c) => c.paragraphs.join("\n\n")).join("\n\n");
   const rows = analyzeScopeText(text, unknown);
   renderSuggestions(ui.librarySuggestions, `Whole-book suggestions: ${book.title}`, rows);
+}
+
+function suggestWholeCurrentBook() {
+  if (!state.currentBookId) {
+    ui.statusText.textContent = "Open a book first.";
+    return;
+  }
+  const book = state.books.find((b) => b.id === state.currentBookId);
+  if (!book) return;
+  const { unknown } = computeUnknownSet(book);
+  const text = book.chapters.map((c) => c.paragraphs.join("\n\n")).join("\n\n");
+  const rows = analyzeScopeText(text, unknown);
+  renderSuggestions(ui.readerSuggestions, `Whole-book suggestions: ${book.title}`, rows);
 }
 
 async function deleteBook(bookId) {
@@ -1094,6 +1139,8 @@ function bindEvents() {
   });
 
   ui.suggestRemainingBtn.addEventListener("click", suggestRemaining);
+  ui.suggestNextBtn.addEventListener("click", suggestNextChapter);
+  ui.suggestWholeReaderBtn.addEventListener("click", suggestWholeCurrentBook);
 
   ui.bookUpload.addEventListener("change", async (ev) => {
     const file = ev.target.files && ev.target.files[0];
