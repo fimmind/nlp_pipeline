@@ -21,7 +21,7 @@ function createElementStub() {
 }
 
 function loadAppModule() {
-  const appPath = path.resolve(__dirname, '..', 'vocab_test_site', 'app.js');
+  const appPath = path.resolve(__dirname, '..', 'site', 'app.js');
   let source = fs.readFileSync(appPath, 'utf8');
   source = source.replace(/main\(\)\.catch\(\(err\) => \{[\s\S]*?\}\);\s*$/, '');
   source += '\nmodule.exports = { state, normalizeWord, isProperNounTag, isNameLikeToken, buildHighConfidenceProperNounLexicon, contextualDeinflectTaggedTerms, makeLemmaCandidates };\n';

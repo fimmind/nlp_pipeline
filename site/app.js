@@ -76,6 +76,7 @@ const state = {
   quizWords: [],
   quizBatchSize: 10,
   quizBatchIndex: 0,
+  lexiconEntries: new Map(),
 };
 
 function normalizeWord(token) {
@@ -699,6 +700,16 @@ function analyzeScopeText(text, unknownSet) {
 }
 
 function getLexiconEntry(word) {
+  const row = state.lexiconEntries.get(word);
+  if (row) {
+    return {
+      word,
+      ipa: typeof row.ipa === "string" && row.ipa.trim() ? row.ipa.trim() : `/${word}/`,
+      definition: typeof row.definition === "string" && row.definition.trim()
+        ? row.definition.trim()
+        : "Definition unavailable in this build.",
+    };
+  }
   return {
     word,
     ipa: `/${word}/`,
@@ -967,6 +978,60 @@ async function loadLemmaDict() {
   }
 }
 
+async function loadLexicon() {
+  const ingestEntries = (rows) => {
+    if (!Array.isArray(rows)) return;
+    for (const row of rows) {
+      if (!row || typeof row.word !== "string") continue;
+      const word = normalizeWord(row.word);
+      if (!word) continue;
+      if (!state.lexiconEntries.has(word)) {
+        state.lexiconEntries.set(word, {
+          ipa: typeof row.ipa === "string" ? row.ipa : "",
+          definition: typeof row.definition === "string" ? row.definition : "",
+        });
+      }
+    }
+  };
+
+  const tryLoad = async (path) => {
+    try {
+      const res = await fetch(path);
+      if (!res.ok) return false;
+      const payload = await res.json();
+      if (Array.isArray(payload)) {
+        ingestEntries(payload);
+        return true;
+      }
+      if (payload && Array.isArray(payload.entries)) {
+        ingestEntries(payload.entries);
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  };
+
+  const loadedFull = await tryLoad("./data/lexicon_full.json");
+  if (loadedFull) return;
+
+  // Optional chunked format: index maps chunk key -> file path.
+  try {
+    const indexRes = await fetch("./data/lexicon/index.json");
+    if (!indexRes.ok) return;
+    const indexPayload = await indexRes.json();
+    if (!indexPayload || typeof indexPayload !== "object") return;
+    const chunkFiles = Object.values(indexPayload).filter((v) => typeof v === "string");
+    for (const filePath of chunkFiles) {
+      // Load all chunks once at startup for synchronous card rendering.
+      await tryLoad(`./data/lexicon/${filePath}`);
+    }
+  } catch {
+    // Lexicon remains optional in this build.
+  }
+}
+
 async function seedLibraryIfEmpty() {
   const books = await dbListBooks();
   if (books.length > 0) {
@@ -1057,7 +1122,7 @@ async function main() {
   loadUiPrefs();
   state.profiles = loadProfilesStore();
   ensureProfile(state.profiles.current || DEFAULT_PROFILE_NAME);
-  await Promise.all([loadModel(), loadLemmaDict()]);
+  await Promise.all([loadModel(), loadLemmaDict(), loadLexicon()]);
   await seedLibraryIfEmpty();
   bindEvents();
   renderProfiles();

@@ -13,7 +13,7 @@ def test_site_app_contextual_checks() -> None:
         check=False,
     )
     assert result.returncode == 0, (
-        "vocab_test_site/app.js contextual checks failed\n"
+        "site/app.js contextual checks failed\n"
         f"stdout:\n{result.stdout}\n"
         f"stderr:\n{result.stderr}"
     )
