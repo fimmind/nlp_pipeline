@@ -1149,7 +1149,10 @@ function bindEvents() {
     renderReader();
   });
 
-  ui.startQuizBtn.addEventListener("click", startQuizFlow);
+  ui.startQuizBtn.addEventListener("click", () => {
+    renderView("profile");
+    startQuizFlow();
+  });
   ui.submitChecklistBtn.addEventListener("click", submitQuizBatch);
   ui.exportProfileBtn.addEventListener("click", exportCurrentProfile);
   ui.importProfileInput.addEventListener("change", async (ev) => {
@@ -1207,7 +1210,9 @@ async function main() {
   renderOnboardingBanner();
   renderLibrary();
   renderReader();
-  renderView("library");
+  const isFirstRun = Object.keys(state.profiles.items).length <= 1
+    && Object.keys(state.activeProfile.observed).length === 0;
+  renderView(isFirstRun ? "profile" : "library");
   ui.statusText.textContent = `Ready. Model: ${MODEL_KEY}. Profile: ${state.activeProfile.name}.`;
 }
 
