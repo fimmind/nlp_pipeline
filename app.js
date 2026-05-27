@@ -1,85 +1,20 @@
-const STORAGE_KEY = "vocab_book_profiles_v3";
+const PROFILE_STORAGE_KEY = "vocab_reader_profiles_v2";
+const UI_STORAGE_KEY = "vocab_reader_ui_state_v1";
+const BOOK_DB_NAME = "vocab_reader_books_v1";
+const BOOK_STORE = "books";
 const WORD_RE = /[A-Za-z]+(?:['’][A-Za-z]+)?/g;
 const SENTENCE_RE = /[^.!?]+[.!?]+|[^.!?]+$/g;
 
-const MODEL_DEFAULT = "best_grouped_irt_model";
-const STRATEGY_DEFAULT = "adaptive_uncertainty_light_random";
-const DEFAULT_BOOK_NAME = "The Hitchhiker's Guide to the Galaxy";
-
-const ui = {
-  nicknameInput: document.getElementById("nicknameInput"),
-  loadProfileBtn: document.getElementById("loadProfileBtn"),
-  listProfilesBtn: document.getElementById("listProfilesBtn"),
-  profilesListText: document.getElementById("profilesListText"),
-  modelSelect: document.getElementById("modelSelect"),
-  quizStrategy: document.getElementById("quizStrategy"),
-  questionCount: document.getElementById("questionCount"),
-  questionCountValue: document.getElementById("questionCountValue"),
-  startBtn: document.getElementById("startBtn"),
-  showAnalysisBtn: document.getElementById("showAnalysisBtn"),
-  resetBtn: document.getElementById("resetBtn"),
-  statusText: document.getElementById("statusText"),
-  quizSection: document.getElementById("quizSection"),
-  quizProgress: document.getElementById("quizProgress"),
-  checklistWrap: document.getElementById("checklistWrap"),
-  submitChecklistBtn: document.getElementById("submitChecklistBtn"),
-  addWordsSection: document.getElementById("addWordsSection"),
-  addWordsTextarea: document.getElementById("addWordsTextarea"),
-  submitAddWordsBtn: document.getElementById("submitAddWordsBtn"),
-  addWordsStatus: document.getElementById("addWordsStatus"),
-  resultsSection: document.getElementById("resultsSection"),
-  estimateStats: document.getElementById("estimateStats"),
-  knownList: document.getElementById("knownList"),
-  unknownList: document.getElementById("unknownList"),
-  nameList: document.getElementById("nameList"),
-  sentenceList: document.getElementById("sentenceList"),
-  bookUpload: document.getElementById("bookUpload"),
-  resetBookBtn: document.getElementById("resetBookBtn"),
-  bookName: document.getElementById("bookName"),
-  knownThreshold: document.getElementById("knownThreshold"),
-  knownThresholdValue: document.getElementById("knownThresholdValue"),
-};
-
-const state = {
-  model: null,
-  bookText: "",
-  profiles: loadProfilesStore(),
-  currentNickname: "default",
-  profile: { answers: {}, questionCount: 100, modelKey: MODEL_DEFAULT, strategy: STRATEGY_DEFAULT, knownThreshold: 0.5 },
-  quizWords: [],
-  currentBatch: 0,
-  batchSize: 10,
-  isAdaptiveQuiz: false,
-  quizSeed: 0,
-  totalQuestionCount: 100,
-  lemmaDict: {},
-};
-
-function normalizeWord(token) {
-  if (typeof token !== "string") return "";
-  return token.toLowerCase().replaceAll("’", "'").replace(/^'+|'+$/g, "");
-}
-
-function safeNickname(raw) {
-  const out = String(raw || "").trim().toLowerCase().replace(/[^a-z0-9_.-]+/g, "_");
-  return out || "default";
-}
+const MODEL_KEY = "best_grouped_irt_model";
+const QUIZ_STRATEGY = "adaptive_uncertainty_light_random";
+const DEFAULT_QUIZ_SIZE = 60;
+const DEFAULT_THRESHOLD = 0.5;
+const DEFAULT_PROFILE_NAME = "default";
 
 const WORD_TOKEN_RE = /^[A-Za-z]+(?:['’][A-Za-z]+)?$/;
 const NAME_LIKE_TOKEN_RE = /^[A-Z][A-Za-z]*(?:['’-][A-Za-z]+)*$/;
 const COMPROMISE_PROPER_TAGS = new Set([
-  "ProperNoun",
-  "Person",
-  "FirstName",
-  "LastName",
-  "MaleName",
-  "FemaleName",
-  "Place",
-  "City",
-  "Country",
-  "Region",
-  "Organization",
-  "Demonym",
+  "ProperNoun", "Person", "FirstName", "LastName", "MaleName", "FemaleName", "Place", "City", "Country", "Region", "Organization", "Demonym",
 ]);
 const TITLE_CASE_NOISE_TOKENS = new Set([
   "a", "an", "and", "are", "as", "at", "be", "been", "being", "but", "by", "did", "do", "does", "first",
@@ -89,11 +24,73 @@ const TITLE_CASE_NOISE_TOKENS = new Set([
   "what", "when", "where", "which", "who", "why", "will", "with", "you", "your",
 ]);
 const CALENDAR_WORD_EXCLUSIONS = new Set([
-  "monday", "mon", "tuesday", "tue", "tues", "wednesday", "wed", "thursday", "thu", "thur", "thurs",
-  "friday", "fri", "saturday", "sat", "sunday", "sun",
-  "january", "jan", "february", "feb", "march", "mar", "april", "apr", "may", "june", "jun", "july", "jul",
-  "august", "aug", "september", "sep", "sept", "october", "oct", "november", "nov", "december", "dec",
+  "monday", "mon", "tuesday", "tue", "tues", "wednesday", "wed", "thursday", "thu", "thur", "thurs", "friday", "fri", "saturday", "sat", "sunday", "sun",
+  "january", "jan", "february", "feb", "march", "mar", "april", "apr", "may", "june", "jun", "july", "jul", "august", "aug", "september", "sep", "sept", "october", "oct", "november", "nov", "december", "dec",
 ]);
+
+const ui = {
+  goLibraryBtn: document.getElementById("goLibraryBtn"),
+  goReaderBtn: document.getElementById("goReaderBtn"),
+  goProfileBtn: document.getElementById("goProfileBtn"),
+  statusText: document.getElementById("statusText"),
+  onboardingBanner: document.getElementById("onboardingBanner"),
+
+  libraryView: document.getElementById("libraryView"),
+  libraryList: document.getElementById("libraryList"),
+  librarySuggestions: document.getElementById("librarySuggestions"),
+  bookUpload: document.getElementById("bookUpload"),
+
+  readerView: document.getElementById("readerView"),
+  chapterNav: document.getElementById("chapterNav"),
+  readerBookTitle: document.getElementById("readerBookTitle"),
+  readerChapterTitle: document.getElementById("readerChapterTitle"),
+  readerParagraphs: document.getElementById("readerParagraphs"),
+  suggestRemainingBtn: document.getElementById("suggestRemainingBtn"),
+  toggleAssistBtn: document.getElementById("toggleAssistBtn"),
+  readerSuggestions: document.getElementById("readerSuggestions"),
+
+  profileView: document.getElementById("profileView"),
+  profileNameInput: document.getElementById("profileNameInput"),
+  createProfileBtn: document.getElementById("createProfileBtn"),
+  deleteProfileBtn: document.getElementById("deleteProfileBtn"),
+  profilesText: document.getElementById("profilesText"),
+  quizCountInput: document.getElementById("quizCountInput"),
+  startQuizBtn: document.getElementById("startQuizBtn"),
+  exportProfileBtn: document.getElementById("exportProfileBtn"),
+  importProfileInput: document.getElementById("importProfileInput"),
+  quizSection: document.getElementById("quizSection"),
+  quizProgress: document.getElementById("quizProgress"),
+  checklistWrap: document.getElementById("checklistWrap"),
+  submitChecklistBtn: document.getElementById("submitChecklistBtn"),
+};
+
+const state = {
+  model: null,
+  lemmaDict: {},
+  profiles: { current: DEFAULT_PROFILE_NAME, items: {} },
+  activeProfile: null,
+  books: [],
+  currentBookId: "",
+  currentChapterIdx: 0,
+  assistEnabled: true,
+  quizWords: [],
+  quizBatchSize: 10,
+  quizBatchIndex: 0,
+};
+
+function normalizeWord(token) {
+  if (typeof token !== "string") return "";
+  return token.toLowerCase().replaceAll("’", "'").replace(/^'+|'+$/g, "");
+}
+
+function safeNickname(raw) {
+  const out = String(raw || "").trim().toLowerCase().replace(/[^a-z0-9_.-]+/g, "_");
+  return out || DEFAULT_PROFILE_NAME;
+}
+
+function clip01(p) { return Math.min(1 - 1e-6, Math.max(1e-6, p)); }
+function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
+function logit(p) { return Math.log(p / (1 - p)); }
 
 function orderedUnique(items) {
   const out = [];
@@ -109,23 +106,17 @@ function orderedUnique(items) {
 function extractCompromiseTermTags(term) {
   const raw = term && term.tags ? term.tags : null;
   const normalizeTag = (tag) => String(tag || "").replace(/^#/, "").trim();
-  if (Array.isArray(raw)) {
-    return new Set(raw.map(normalizeTag).filter(Boolean));
-  }
-  if (raw && typeof raw === "object") {
-    return new Set(Object.keys(raw).map(normalizeTag).filter(Boolean));
-  }
+  if (Array.isArray(raw)) return new Set(raw.map(normalizeTag).filter(Boolean));
+  if (raw && typeof raw === "object") return new Set(Object.keys(raw).map(normalizeTag).filter(Boolean));
   return new Set();
 }
 
 function isProperNounTag(termTags, rawToken, tokenPos) {
-  for (const tag of COMPROMISE_PROPER_TAGS) {
-    if (termTags.has(tag)) return true;
-  }
+  for (const tag of COMPROMISE_PROPER_TAGS) if (termTags.has(tag)) return true;
   if (!WORD_TOKEN_RE.test(rawToken)) return false;
   if (rawToken.toUpperCase() === rawToken) return false;
   if (!/^[A-Z]/.test(rawToken)) return false;
-  const normalized = normalizeWord(rawToken).replace(/^'+|'+$/g, "");
+  const normalized = normalizeWord(rawToken);
   if (!normalized) return false;
   if (CALENDAR_WORD_EXCLUSIONS.has(normalized)) return false;
   if (TITLE_CASE_NOISE_TOKENS.has(normalized)) return false;
@@ -137,32 +128,22 @@ function isNameLikeToken(rawToken) {
   if (rawToken === "") return false;
   if (rawToken.toUpperCase() === rawToken) return false;
   if (NAME_LIKE_TOKEN_RE.test(rawToken) === false) return false;
-  const normalized = normalizeWord(rawToken).replace(/^'+|'+$/g, "");
-  if (normalized === "") return false;
+  const normalized = normalizeWord(rawToken);
+  if (!normalized) return false;
   if (CALENDAR_WORD_EXCLUSIONS.has(normalized)) return false;
   if (TITLE_CASE_NOISE_TOKENS.has(normalized)) return false;
   return true;
 }
 
 function tagSentenceTerms(sentence) {
-  const fallbackTerms = [...sentence.matchAll(WORD_RE)].map((m) => ({
-    raw: m[0],
-    normalized: normalizeWord(m[0]),
-    tags: new Set(),
-  }));
+  const fallbackTerms = [...sentence.matchAll(WORD_RE)].map((m) => ({ raw: m[0], normalized: normalizeWord(m[0]), tags: new Set() }));
   if (typeof nlp === "undefined") return fallbackTerms;
   let terms;
-  try {
-    terms = nlp(sentence).terms().json();
-  } catch {
-    return fallbackTerms;
-  }
+  try { terms = nlp(sentence).terms().json(); } catch { return fallbackTerms; }
   if (!Array.isArray(terms) || terms.length === 0) return fallbackTerms;
   const out = [];
   for (const termMatch of terms) {
-    const termNodes = Array.isArray(termMatch && termMatch.terms) && termMatch.terms.length > 0
-      ? termMatch.terms
-      : [termMatch];
+    const termNodes = Array.isArray(termMatch && termMatch.terms) && termMatch.terms.length > 0 ? termMatch.terms : [termMatch];
     for (const node of termNodes) {
       const rawText = String(node && node.text ? node.text : "").trim();
       if (!rawText) continue;
@@ -170,22 +151,19 @@ function tagSentenceTerms(sentence) {
       const matches = [...rawText.matchAll(WORD_RE)];
       for (const match of matches) {
         if (!WORD_TOKEN_RE.test(match[0])) continue;
-        out.push({
-          raw: match[0],
-          normalized: normalizeWord(match[0]),
-          tags,
-        });
+        out.push({ raw: match[0], normalized: normalizeWord(match[0]), tags });
       }
     }
   }
   return out.length > 0 ? out : fallbackTerms;
 }
 
+function splitSentences(text) {
+  return [...text.matchAll(SENTENCE_RE)].map((m) => m[0].trim()).filter(Boolean);
+}
+
 function buildTaggedSentences(text) {
-  return splitSentences(text).map((sentence) => ({
-    sentence,
-    taggedTerms: tagSentenceTerms(sentence),
-  }));
+  return splitSentences(text).map((sentence) => ({ sentence, taggedTerms: tagSentenceTerms(sentence) }));
 }
 
 function buildHighConfidenceProperNounLexicon(taggedSentences) {
@@ -195,20 +173,10 @@ function buildHighConfidenceProperNounLexicon(taggedSentences) {
       const row = sentence[i];
       const normalized = row.normalized;
       if (!normalized) continue;
-      if (!stats.has(normalized)) {
-        stats.set(normalized, {
-          total: 0,
-          proper: 0,
-          sentenceInitialProper: 0,
-          lowercaseSeen: 0,
-          nameLikeProper: 0,
-        });
-      }
+      if (!stats.has(normalized)) stats.set(normalized, { total: 0, proper: 0, sentenceInitialProper: 0, lowercaseSeen: 0, nameLikeProper: 0 });
       const agg = stats.get(normalized);
       agg.total += 1;
-      if (row.raw.slice(0, 1).toLowerCase() === row.raw.slice(0, 1)) {
-        agg.lowercaseSeen += 1;
-      }
+      if (row.raw.slice(0, 1).toLowerCase() === row.raw.slice(0, 1)) agg.lowercaseSeen += 1;
       if (isProperNounTag(row.tags, row.raw, i)) {
         agg.proper += 1;
         if (i === 0) agg.sentenceInitialProper += 1;
@@ -237,30 +205,23 @@ function makeLemmaCandidates(rawToken, termTags) {
   const addCandidate = (value) => {
     if (typeof value !== "string") return;
     const candidate = normalizeWord(value);
-    if (!candidate) return;
-    if (!WORD_TOKEN_RE.test(candidate)) return;
+    if (!candidate || !WORD_TOKEN_RE.test(candidate)) return;
     candidates.push(candidate);
   };
   if (state.lemmaDict[normalized]) addCandidate(state.lemmaDict[normalized]);
   if (typeof nlp !== "undefined") {
     try {
       const doc = nlp(rawToken);
-      if (termTags.has("Verb")) {
-        addCandidate(doc.verbs().toInfinitive().text());
-      }
-      if (termTags.has("Noun")) {
-        addCandidate(doc.nouns().toSingular().text());
-      }
+      if (termTags.has("Verb")) addCandidate(doc.verbs().toInfinitive().text());
+      if (termTags.has("Noun")) addCandidate(doc.nouns().toSingular().text());
       if (termTags.has("Adjective")) {
         const adjConj = doc.adjectives().conjugate();
-        if (Array.isArray(adjConj) && adjConj.length > 0 && adjConj[0].adjective) {
-          addCandidate(adjConj[0].adjective);
-        }
+        if (Array.isArray(adjConj) && adjConj.length > 0 && adjConj[0].adjective) addCandidate(adjConj[0].adjective);
       }
       addCandidate(doc.verbs().toInfinitive().text());
       addCandidate(doc.nouns().toSingular().text());
     } catch {
-      // Keep processing with the candidates already accumulated.
+      // No-op.
     }
   }
   addCandidate(normalized);
@@ -287,583 +248,66 @@ function contextualDeinflectTaggedTerms(taggedTerms, lowerToIdx, excludeProperNo
   return { tokens: outTokens, properFlags: outFlags };
 }
 
-async function loadLemmaDict() {
-  try {
-    const res = await fetch("./data/lemma_dict.json");
-    if (res.ok) {
-      state.lemmaDict = await res.json();
-    }
-  } catch (err) {
-    console.warn("Failed to load lemma dict:", err);
-  }
-}
-
-function logit(p) { return Math.log(p / (1 - p)); }
-function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
-function clip01(p) { return Math.min(1 - 1e-6, Math.max(1e-6, p)); }
-
 function loadProfilesStore() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : { currentNickname: "default", profiles: {} };
-    return {
-      currentNickname: safeNickname(parsed.currentNickname || "default"),
-      profiles: parsed.profiles || {},
-    };
+    const raw = localStorage.getItem(PROFILE_STORAGE_KEY);
+    if (!raw) return { current: DEFAULT_PROFILE_NAME, items: {} };
+    const parsed = JSON.parse(raw);
+    return { current: safeNickname(parsed.current || DEFAULT_PROFILE_NAME), items: parsed.items || {} };
   } catch {
-    return { currentNickname: "default", profiles: {} };
+    return { current: DEFAULT_PROFILE_NAME, items: {} };
   }
 }
 
 function saveProfilesStore() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    currentNickname: state.currentNickname,
-    profiles: state.profiles.profiles,
-  }));
+  localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(state.profiles));
 }
 
-function loadCurrentProfile() {
-  const existing = state.profiles.profiles[state.currentNickname];
-  state.profile = existing || {
-    answers: {},
-    questionCount: 100,
-    modelKey: MODEL_DEFAULT,
-    strategy: STRATEGY_DEFAULT,
-  };
-  state.profiles.profiles[state.currentNickname] = state.profile;
-  state.profiles.currentNickname = state.currentNickname;
+function loadUiPrefs() {
+  try {
+    const raw = localStorage.getItem(UI_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    state.assistEnabled = parsed.assistEnabled !== false;
+  } catch {
+    // ignore
+  }
 }
 
-function saveCurrentProfile() {
-  state.profiles.profiles[state.currentNickname] = state.profile;
-  state.profiles.currentNickname = state.currentNickname;
+function saveUiPrefs() {
+  localStorage.setItem(UI_STORAGE_KEY, JSON.stringify({ assistEnabled: state.assistEnabled }));
+}
+
+function ensureProfile(name) {
+  if (!state.profiles.items[name]) {
+    state.profiles.items[name] = {
+      version: 2,
+      name,
+      observed: {},
+      settings: {
+        knownThreshold: DEFAULT_THRESHOLD,
+        quizSize: DEFAULT_QUIZ_SIZE,
+      },
+      quizMeta: {
+        strategy: QUIZ_STRATEGY,
+        lastTakenAt: null,
+      },
+    };
+  }
+  state.profiles.current = name;
+  state.activeProfile = state.profiles.items[name];
   saveProfilesStore();
 }
 
-function initControls() {
-  const q = Math.min(200, Math.max(10, Number(state.profile.questionCount) || 100));
-  ui.questionCount.value = String(q);
-  ui.questionCountValue.textContent = String(q);
-  ui.modelSelect.value = state.profile.modelKey || MODEL_DEFAULT;
-  ui.quizStrategy.value = state.profile.strategy || STRATEGY_DEFAULT;
-  const t = Math.min(0.9, Math.max(0.1, Number(state.profile.knownThreshold) || 0.5));
-  ui.knownThreshold.value = String(t);
-  ui.knownThresholdValue.textContent = t.toFixed(2);
-}
-
-async function loadData(modelKey) {
-  const filename = modelKey === "rasch" ? "rasch_model_data.json" : `${modelKey}_model_data.json`;
-  const modelRes = await fetch(`./data/${filename}`);
-  if (!modelRes.ok) throw new Error(`Failed to load model data: ${modelRes.status}`);
-  state.model = await modelRes.json();
-  state.model.wordToIdx = new Map(state.model.words.map((w, i) => [w, i]));
-  state.model.vocabSet = new Set(state.model.words);
-  state.model.b = state.model.accuracy.map((a) => {
-    const p = a == null ? 0.5 : clip01(a);
-    return -logit(p);
-  });
-}
-
-async function loadDefaultBook() {
-  const bookRes = await fetch("./data/hitchhikers_guide.txt");
-  if (!bookRes.ok) throw new Error(`Failed to load book: ${bookRes.status}`);
-  state.bookText = await bookRes.text();
-}
-
-function setBookName(name) {
-  const text = `Current: ${name}`;
-  ui.bookName.textContent = text;
-}
-
-function handleBookUpload(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-  if (file.size > 10 * 1024 * 1024) {
-    ui.bookName.textContent = "Error: file too large (max 10 MB).";
-    return;
-  }
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    state.bookText = e.target.result;
-    setBookName(file.name);
-    if (!ui.resultsSection.classList.contains("hidden")) {
-      runEstimation();
-    }
-  };
-  reader.onerror = () => {
-    ui.bookName.textContent = "Error reading file.";
-  };
-  reader.readAsText(file);
-}
-
-async function resetBook() {
-  setBookName("Loading default book...");
-  try {
-    await loadDefaultBook();
-    setBookName(DEFAULT_BOOK_NAME);
-    if (!ui.resultsSection.classList.contains("hidden")) {
-      runEstimation();
-    }
-  } catch (err) {
-    ui.bookName.textContent = `Error: ${err.message}`;
-  }
-}
-
-function hashStringToSeed(input) {
-  let h = 2166136261;
-  for (let i = 0; i < input.length; i++) {
-    h ^= input.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return h >>> 0;
-}
-
-function createRng(seed) {
-  let s = seed >>> 0;
-  return function next() {
-    s = (Math.imul(1664525, s) + 1013904223) >>> 0;
-    return s / 4294967296;
-  };
-}
-
-function weightedSampleWithoutReplacement(items, sampleCount, weightFn, rng) {
-  const pool = [...items];
-  const out = [];
-  const n = Math.min(sampleCount, pool.length);
-  for (let k = 0; k < n; k++) {
-    let total = 0;
-    const weights = [];
-    for (const item of pool) {
-      const w = Math.max(1e-9, weightFn(item));
-      weights.push(w);
-      total += w;
-    }
-    let target = rng() * total;
-    let chosenIdx = 0;
-    for (let i = 0; i < pool.length; i++) {
-      target -= weights[i];
-      if (target <= 0) {
-        chosenIdx = i;
-        break;
-      }
-    }
-    out.push(pool[chosenIdx]);
-    pool.splice(chosenIdx, 1);
-  }
-  return out;
-}
-
-function getCandidatePool() {
-  const basePool = state.model.query_pool;
-  if (!Array.isArray(basePool) || basePool.length === 0) return [];
-  return basePool
-    .map((word) => {
-      const idx = state.model.wordToIdx.get(word);
-      if (idx == null) return null;
-      const acc = clip01(state.model.accuracy[idx] == null ? 0.5 : state.model.accuracy[idx]);
-      return { word, idx, acc };
-    })
-    .filter(Boolean);
-}
-
-function getQuizWordsStatic(questionCount, rng) {
-  const q = Math.max(10, Math.min(200, questionCount));
-  const candidateInfo = getCandidatePool();
-  if (candidateInfo.length <= q) return candidateInfo.map((x) => x.word);
-
-  const bandCount = 5;
-  const bands = Array.from({ length: bandCount }, () => []);
-  for (const item of candidateInfo) {
-    const b = Math.min(bandCount - 1, Math.floor(item.acc * bandCount));
-    bands[b].push(item);
-  }
-
-  const picks = [];
-  const perBand = Math.floor(q / bandCount);
-  const remainder = q % bandCount;
-  for (let b = 0; b < bandCount; b++) {
-    const target = perBand + (b < remainder ? 1 : 0);
-    if (bands[b].length === 0) continue;
-    const sampled = weightedSampleWithoutReplacement(
-      bands[b],
-      target,
-      (x) => 1 - Math.min(1, Math.abs(x.acc - 0.5) * 1.8),
-      rng
-    );
-    picks.push(...sampled);
-  }
-
-  const used = new Set(picks.map((x) => x.word));
-  if (picks.length < q) {
-    const remaining = candidateInfo.filter((x) => !used.has(x.word));
-    const extra = weightedSampleWithoutReplacement(
-      remaining,
-      q - picks.length,
-      (x) => 1 - Math.min(1, Math.abs(x.acc - 0.5) * 1.8),
-      rng
-    );
-    picks.push(...extra);
-  }
-
-  for (let i = picks.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    const tmp = picks[i];
-    picks[i] = picks[j];
-    picks[j] = tmp;
-  }
-
-  return picks.slice(0, q).map((x) => x.word);
-}
-
-function getQuizWordsSemirandom(questionCount, rng) {
-  const words = getQuizWordsStatic(questionCount, rng);
-  // Small random swaps like CLI's semirandom for grouped IRT
-  const arr = [...words];
-  for (let i = 0; i < arr.length - 1; i++) {
-    if (rng() < 0.05) {
-      const j = i + 1 + Math.floor(rng() * Math.min(3, arr.length - i - 1));
-      if (j < arr.length) {
-        [arr[i], arr[j]] = [arr[j], arr[i]];
-      }
-    }
-  }
-  return arr;
-}
-
-function getQuizWordsAdaptiveUncertainty(questionCount, rng) {
-  const q = Math.max(10, Math.min(200, questionCount));
-  const candidateInfo = getCandidatePool();
-  if (candidateInfo.length <= q) return candidateInfo.map((x) => x.word);
-
-  const answered = new Set(Object.keys(state.profile.answers));
-  let pool = candidateInfo.filter((x) => !answered.has(x.word));
-  if (pool.length < q) pool = candidateInfo;
-
-  const obsIds = [];
-  const obsLabels = [];
-  for (const w of Object.keys(state.profile.answers)) {
-    const idx = state.model.wordToIdx.get(w);
-    if (idx != null) {
-      obsIds.push(idx);
-      obsLabels.push(state.profile.answers[w]);
-    }
-  }
-  const theta = estimateTheta(obsIds, obsLabels);
-
-  // Score by posterior uncertainty = -|p_posterior - 0.5|
-  const scored = pool.map((x) => {
-    const p = predictProba(theta, x.idx);
-    return { ...x, score: -Math.abs(p - 0.5) };
-  });
-  scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, q).map((x) => x.word);
-}
-
-function getQuizWordsAdaptiveUncertaintyLightRandom(questionCount, rng) {
-  const q = Math.max(10, Math.min(200, questionCount));
-  const candidateInfo = getCandidatePool();
-  if (candidateInfo.length <= q) return candidateInfo.map((x) => x.word);
-
-  const answered = new Set(Object.keys(state.profile.answers));
-  let pool = candidateInfo.filter((x) => !answered.has(x.word));
-  if (pool.length < q) pool = candidateInfo;
-
-  const obsIds = [];
-  const obsLabels = [];
-  for (const w of Object.keys(state.profile.answers)) {
-    const idx = state.model.wordToIdx.get(w);
-    if (idx != null) {
-      obsIds.push(idx);
-      obsLabels.push(state.profile.answers[w]);
-    }
-  }
-  const theta = estimateTheta(obsIds, obsLabels);
-
-  const scored = pool.map((x) => {
-    const p = predictProba(theta, x.idx);
-    return { ...x, score: -Math.abs(p - 0.5) };
-  });
-  scored.sort((a, b) => b.score - a.score);
-
-  const topK = 3;
-  const temperature = 0.03;
-  const out = [];
-  const available = scored.map((x, idx) => ({ ...x, _poolIndex: idx }));
-
-  for (let i = 0; i < Math.min(q, available.length); i++) {
-    const candidates = available.slice(0, Math.min(topK, available.length));
-    const maxScore = Math.max(...candidates.map((c) => c.score));
-    const logits = candidates.map((c) => (c.score - maxScore) / temperature);
-    const expLogits = logits.map((l) => Math.exp(Math.max(-60, Math.min(60, l))));
-    const sumExp = expLogits.reduce((a, b) => a + b, 0);
-    const probs = expLogits.map((e) => e / sumExp);
-
-    let r = rng();
-    let chosenIdx = 0;
-    for (let j = 0; j < probs.length; j++) {
-      r -= probs[j];
-      if (r <= 0) {
-        chosenIdx = j;
-        break;
-      }
-    }
-    const removedPoolIndex = candidates[chosenIdx]._poolIndex;
-    out.push(candidates[chosenIdx].word);
-    available.splice(removedPoolIndex, 1);
-    available.forEach((x, idx) => { x._poolIndex = idx; });
-  }
-
-  return out;
-}
-
-function getQuizWordsAdaptiveEerFast(questionCount, rng) {
-  const q = Math.max(10, Math.min(200, questionCount));
-  const candidateInfo = getCandidatePool();
-  if (candidateInfo.length <= q) return candidateInfo.map((x) => x.word);
-
-  const answered = new Set(Object.keys(state.profile.answers));
-  let pool = candidateInfo.filter((x) => !answered.has(x.word));
-  if (pool.length < q) pool = candidateInfo;
-
-  const obsIds = [];
-  const obsLabels = [];
-  for (const w of Object.keys(state.profile.answers)) {
-    const idx = state.model.wordToIdx.get(w);
-    if (idx != null) {
-      obsIds.push(idx);
-      obsLabels.push(state.profile.answers[w]);
-    }
-  }
-  const theta = estimateTheta(obsIds, obsLabels);
-
-  const scoredPool = pool.map((x) => {
-    const p = predictProba(theta, x.idx);
-    return { ...x, uncertainty: -Math.abs(p - 0.5) };
-  });
-  scoredPool.sort((a, b) => b.uncertainty - a.uncertainty);
-  const evalPool = scoredPool.slice(0, 96);
-  const candidatePool = scoredPool.slice(0, 48);
-
-  function entropy(p) {
-    p = Math.max(1e-8, Math.min(1 - 1e-8, p));
-    return -(p * Math.log(p) + (1 - p) * Math.log(1 - p));
-  }
-
-  function meanEntropy(t, excludeIdx) {
-    let sum = 0;
-    let count = 0;
-    for (const e of evalPool) {
-      if (e.idx === excludeIdx) continue;
-      const p = sigmoid(t - state.model.b[e.idx]);
-      sum += entropy(p);
-      count++;
-    }
-    return count === 0 ? 0 : sum / count;
-  }
-
-  const eerScores = candidatePool.map((c) => {
-    const pKnown = clip01(sigmoid(theta - state.model.b[c.idx]));
-    const theta1 = estimateTheta([...obsIds, c.idx], [...obsLabels, 1]);
-    const theta0 = estimateTheta([...obsIds, c.idx], [...obsLabels, 0]);
-    const h1 = meanEntropy(theta1, c.idx);
-    const h0 = meanEntropy(theta0, c.idx);
-    const eer = -(pKnown * h1 + (1 - pKnown) * h0);
-    return { ...c, eer };
-  });
-
-  eerScores.sort((a, b) => b.eer - a.eer);
-
-  const temperature = 0.02;
-  const topK = 1;
-  const out = [];
-  const available = eerScores.map((x, idx) => ({ ...x, _poolIndex: idx }));
-
-  for (let i = 0; i < Math.min(q, available.length); i++) {
-    const candidates = available.slice(0, Math.min(topK, available.length));
-    const maxScore = Math.max(...candidates.map((c) => c.eer));
-    const logits = candidates.map((c) => (c.eer - maxScore) / temperature);
-    const expLogits = logits.map((l) => Math.exp(Math.max(-60, Math.min(60, l))));
-    const sumExp = expLogits.reduce((a, b) => a + b, 0);
-    const probs = expLogits.map((e) => e / sumExp);
-
-    let r = rng();
-    let chosenIdx = 0;
-    for (let j = 0; j < probs.length; j++) {
-      r -= probs[j];
-      if (r <= 0) {
-        chosenIdx = j;
-        break;
-      }
-    }
-    const removedPoolIndex = candidates[chosenIdx]._poolIndex;
-    out.push(candidates[chosenIdx].word);
-    available.splice(removedPoolIndex, 1);
-    available.forEach((x, idx) => { x._poolIndex = idx; });
-  }
-
-  if (out.length < q) {
-    const used = new Set(out);
-    const remaining = scoredPool.filter((x) => !used.has(x.word));
-    out.push(...remaining.slice(0, q - out.length).map((x) => x.word));
-  }
-
-  return out;
-}
-
-function getQuizWordsAdaptiveHybridFast(questionCount, rng) {
-  const q = Math.max(10, Math.min(200, questionCount));
-  const candidateInfo = getCandidatePool();
-  if (candidateInfo.length <= q) return candidateInfo.map((x) => x.word);
-
-  const answered = new Set(Object.keys(state.profile.answers));
-  let pool = candidateInfo.filter((x) => !answered.has(x.word));
-  if (pool.length < q) pool = candidateInfo;
-
-  const obsIds = [];
-  const obsLabels = [];
-  for (const w of Object.keys(state.profile.answers)) {
-    const idx = state.model.wordToIdx.get(w);
-    if (idx != null) {
-      obsIds.push(idx);
-      obsLabels.push(state.profile.answers[w]);
-    }
-  }
-  const theta = estimateTheta(obsIds, obsLabels);
-
-  const scoredPool = pool.map((x) => {
-    const p = predictProba(theta, x.idx);
-    return { ...x, uncertainty: -Math.abs(p - 0.5) };
-  });
-  scoredPool.sort((a, b) => b.uncertainty - a.uncertainty);
-
-  const stage1Count = Math.min(30, q);
-  const stage1 = scoredPool.slice(0, stage1Count);
-
-  let stage2 = [];
-  if (q > stage1Count) {
-    const remainingPool = scoredPool.slice(stage1Count);
-
-    const evalPool = remainingPool.slice(0, 96);
-    const candidatePool = remainingPool.slice(0, 48);
-
-    function entropy(p) {
-      p = Math.max(1e-8, Math.min(1 - 1e-8, p));
-      return -(p * Math.log(p) + (1 - p) * Math.log(1 - p));
-    }
-
-    function meanEntropy(t, excludeIdx) {
-      let sum = 0;
-      let count = 0;
-      for (const e of evalPool) {
-        if (e.idx === excludeIdx) continue;
-        const p = sigmoid(t - state.model.b[e.idx]);
-        sum += entropy(p);
-        count++;
-      }
-      return count === 0 ? 0 : sum / count;
-    }
-
-    const eerScores = candidatePool.map((c) => {
-      const pKnown = clip01(sigmoid(theta - state.model.b[c.idx]));
-      const theta1 = estimateTheta([...obsIds, c.idx], [...obsLabels, 1]);
-      const theta0 = estimateTheta([...obsIds, c.idx], [...obsLabels, 0]);
-      const h1 = meanEntropy(theta1, c.idx);
-      const h0 = meanEntropy(theta0, c.idx);
-      const eer = -(pKnown * h1 + (1 - pKnown) * h0);
-      return { ...c, eer };
-    });
-
-    eerScores.sort((a, b) => b.eer - a.eer);
-    stage2 = eerScores.slice(0, q - stage1Count);
-  }
-
-  return [...stage1, ...stage2].map((x) => x.word);
-}
-
-function getQuizWordsAdaptiveEntropy(questionCount, rng) {
-  // For binary case, entropy is maximized at p=0.5, same as uncertainty
-  return getQuizWordsAdaptiveUncertainty(questionCount, rng);
-}
-
-function getQuizWordsAdaptiveStochasticEntropy(questionCount, rng) {
-  // Same as light_random for binary case
-  return getQuizWordsAdaptiveUncertaintyLightRandom(questionCount, rng);
-}
-
-function getQuizWords(questionCount, strategy) {
-  const q = Math.max(10, Math.min(200, questionCount));
-  // Resolve auto like CLI: grouped IRT -> adaptive_uncertainty_light_random, else static
-  if (strategy === "auto") {
-    strategy = state.profile.modelKey === "best_grouped_irt_model" ? "adaptive_uncertainty_light_random" : "static";
-  }
-  const nowBucket = Math.floor(Date.now() / 60000);
-  const seed = hashStringToSeed(`${state.currentNickname}|${q}|${nowBucket}|${strategy}`);
-  const rng = createRng(seed);
-
-  switch (strategy) {
-    case "semirandom":
-      return getQuizWordsSemirandom(q, rng);
-    case "adaptive_uncertainty":
-      return getQuizWordsAdaptiveUncertainty(q, rng);
-    case "adaptive_uncertainty_light_random":
-      return getQuizWordsAdaptiveUncertaintyLightRandom(q, rng);
-    case "adaptive_entropy":
-      return getQuizWordsAdaptiveEntropy(q, rng);
-    case "adaptive_stochastic_entropy":
-      return getQuizWordsAdaptiveStochasticEntropy(q, rng);
-    case "adaptive_eer_fast":
-      return getQuizWordsAdaptiveEerFast(q, rng);
-    case "adaptive_hybrid_fast":
-      return getQuizWordsAdaptiveHybridFast(q, rng);
-    case "static":
-    default:
-      return getQuizWordsStatic(q, rng);
-  }
-}
-
-function isAdaptiveStrategy(strategy) {
-  return [
-    "adaptive_uncertainty",
-    "adaptive_uncertainty_light_random",
-    "adaptive_entropy",
-    "adaptive_stochastic_entropy",
-    "adaptive_eer_fast",
-    "adaptive_hybrid_fast",
-    "auto",
-  ].includes(strategy);
-}
-
-function getAdaptiveBatchWords(batchSize, strategy, rng) {
-  // Resolve auto like getQuizWords does
-  if (strategy === "auto") {
-    strategy = state.profile.modelKey === "best_grouped_irt_model" ? "adaptive_uncertainty_light_random" : "static";
-  }
-  switch (strategy) {
-    case "adaptive_uncertainty":
-      return getQuizWordsAdaptiveUncertainty(batchSize, rng);
-    case "adaptive_uncertainty_light_random":
-      return getQuizWordsAdaptiveUncertaintyLightRandom(batchSize, rng);
-    case "adaptive_entropy":
-      return getQuizWordsAdaptiveEntropy(batchSize, rng);
-    case "adaptive_stochastic_entropy":
-      return getQuizWordsAdaptiveStochasticEntropy(batchSize, rng);
-    case "adaptive_eer_fast":
-      return getQuizWordsAdaptiveEerFast(batchSize, rng);
-    case "adaptive_hybrid_fast":
-      return getQuizWordsAdaptiveHybridFast(batchSize, rng);
-    default:
-      return getQuizWordsStatic(batchSize, rng);
-  }
-}
-
-function getObservedPairs(quizWords) {
+function getObservedPairs() {
   const ids = [];
   const labels = [];
-  for (const w of quizWords) {
-    if (Object.prototype.hasOwnProperty.call(state.profile.answers, w)) {
-      ids.push(state.model.wordToIdx.get(w));
-      labels.push(state.profile.answers[w]);
-    }
+  const entries = Object.entries(state.activeProfile.observed);
+  for (const [word, label] of entries) {
+    const idx = state.model.wordToIdx.get(word);
+    if (idx == null) continue;
+    ids.push(idx);
+    labels.push(label);
   }
   return { ids, labels };
 }
@@ -871,10 +315,10 @@ function getObservedPairs(quizWords) {
 function estimateTheta(obsIds, obsLabels, priorVar = 25.0, steps = 20) {
   let theta = 0.0;
   if (obsIds.length === 0) return theta;
-  for (let k = 0; k < steps; k++) {
+  for (let k = 0; k < steps; k += 1) {
     let grad = -theta / priorVar;
     let h = -1.0 / priorVar;
-    for (let i = 0; i < obsIds.length; i++) {
+    for (let i = 0; i < obsIds.length; i += 1) {
       const z = theta - state.model.b[obsIds[i]];
       const p = sigmoid(z);
       grad += obsLabels[i] - p;
@@ -891,462 +335,737 @@ function predictProba(theta, wordIdx) {
 }
 
 function effectiveWordBelief(theta, word, wordIdx) {
-  if (Object.prototype.hasOwnProperty.call(state.profile.answers, word)) {
-    return { p: state.profile.answers[word] === 1 ? 1.0 : 0.0, observed: true };
+  if (Object.prototype.hasOwnProperty.call(state.activeProfile.observed, word)) {
+    return { p: state.activeProfile.observed[word] === 1 ? 1.0 : 0.0, observed: true };
   }
   return { p: predictProba(theta, wordIdx), observed: false };
 }
 
-function splitSentences(text) {
-  return [...text.matchAll(SENTENCE_RE)].map((m) => m[0].trim()).filter(Boolean);
+function hashStringToSeed(input) {
+  let h = 2166136261;
+  for (let i = 0; i < input.length; i += 1) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
 }
 
-function analyzeBook(theta) {
-  const taggedSentenceRows = buildTaggedSentences(state.bookText);
-  const taggedSentences = taggedSentenceRows.map((row) => row.taggedTerms);
-  const properNounLexicon = buildHighConfidenceProperNounLexicon(taggedSentences);
-
-  const tokenFreq = new Map();
-  const inVocabWords = new Map();
-  let tokenCount = 0;
-  let properNounExcludedTokenCount = 0;
-  const nameTypeCounts = new Map();
-  for (const taggedTerms of taggedSentences) {
-    const { tokens, properFlags } = contextualDeinflectTaggedTerms(
-      taggedTerms,
-      state.model.wordToIdx,
-      true,
-      properNounLexicon,
-    );
-    for (let i = 0; i < tokens.length; i += 1) {
-      tokenCount += 1;
-      if (properFlags[i]) {
-        properNounExcludedTokenCount += 1;
-        const normalizedName = normalizeWord(taggedTerms[i].raw);
-        if (normalizedName) {
-          nameTypeCounts.set(normalizedName, (nameTypeCounts.get(normalizedName) || 0) + 1);
-        }
-        continue;
-      }
-      const lemma = tokens[i];
-      if (!lemma) continue;
-      tokenFreq.set(lemma, (tokenFreq.get(lemma) || 0) + 1);
-      const idx = state.model.wordToIdx.get(lemma);
-      if (idx != null) inVocabWords.set(lemma, idx);
-    }
-  }
-
-  let inVocabTokenCount = 0;
-  let unknownTokenCount = 0;
-  const knownRows = [];
-  const unknownRows = [];
-
-  const threshold = Math.min(0.9, Math.max(0.1, Number(state.profile.knownThreshold) || 0.5));
-  for (const [word, idx] of inVocabWords.entries()) {
-    const count = tokenFreq.get(word) || 0;
-    const { p, observed } = effectiveWordBelief(theta, word, idx);
-    inVocabTokenCount += count;
-    if (p >= threshold) knownRows.push({ word, p, count, observed });
-    else {
-      unknownRows.push({ word, p, count });
-      unknownTokenCount += count;
-    }
-  }
-
-  const sample = (arr, n) => {
-    const xs = [...arr].sort((a, b) => a.word.localeCompare(b.word));
-    if (xs.length <= n) return xs;
-    const out = [];
-    const used = new Set();
-    while (out.length < n) {
-      const i = Math.floor(Math.random() * xs.length);
-      if (!used.has(i)) { used.add(i); out.push(xs[i]); }
-    }
-    return out.sort((a, b) => a.word.localeCompare(b.word));
-  };
-
-  const sentenceRows = [];
-  for (const sentenceRow of taggedSentenceRows) {
-    const sentence = sentenceRow.sentence;
-    const rawTokenCount = sentenceRow.taggedTerms.length;
-    if (rawTokenCount < 4 || rawTokenCount > 35) continue;
-    const { tokens: sentenceLemmas } = contextualDeinflectTaggedTerms(
-      sentenceRow.taggedTerms,
-      state.model.wordToIdx,
-      true,
-      properNounLexicon,
-    );
-    const unknowns = [];
-    let hasOov = false;
-    for (const l of sentenceLemmas) {
-      if (!l) continue;
-      const idx = state.model.wordToIdx.get(l);
-      if (idx == null) { hasOov = true; break; }
-      const { p } = effectiveWordBelief(theta, l, idx);
-      if (p < threshold) unknowns.push({ word: l, p });
-    }
-    if (!hasOov && unknowns.length === 1) {
-      sentenceRows.push({ sentence, word: unknowns[0].word, p: unknowns[0].p });
-    }
-  }
-
-  const shuffledSentences = [...sentenceRows].sort(() => Math.random() - 0.5).slice(0, 10);
-
-  return {
-    tokenCount,
-    properNounExcludedTokenCount,
-    inVocabTokenCount,
-    oovTokenCount: tokenCount - properNounExcludedTokenCount - inVocabTokenCount,
-    unknownTokenCount,
-    unknownPct: inVocabTokenCount === 0 ? 0 : (100 * unknownTokenCount) / inVocabTokenCount,
-    detectedNames: sample([...nameTypeCounts.entries()].map(([word, count]) => ({ word, count })), 25),
-    knownRows: sample(knownRows, 25),
-    unknownRows: sample(unknownRows, 25),
-    oneUnknownSentences: shuffledSentences,
+function createRng(seed) {
+  let s = seed >>> 0;
+  return function next() {
+    s = (Math.imul(1664525, s) + 1013904223) >>> 0;
+    return s / 4294967296;
   };
 }
 
-function renderStats(a) {
-  const properPct = a.tokenCount === 0 ? 0 : (100 * a.properNounExcludedTokenCount) / a.tokenCount;
-  const rows = [
-    ["Word tokens analyzed", a.tokenCount],
-    ["Proper-noun tokens excluded from analysis", `${a.properNounExcludedTokenCount} (${properPct.toFixed(2)}%)`],
-    ["In-vocabulary tokens used for estimates", a.inVocabTokenCount],
-    ["Out-of-model-vocabulary tokens discarded", a.oovTokenCount],
-    ["Estimated unknown in-vocabulary tokens", `${a.unknownTokenCount} (${a.unknownPct.toFixed(2)}%)`],
-  ];
-  ui.estimateStats.innerHTML = rows.map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+function getCandidatePool() {
+  return state.model.query_pool
+    .map((word) => {
+      const idx = state.model.wordToIdx.get(word);
+      if (idx == null) return null;
+      const acc = clip01(state.model.accuracy[idx] == null ? 0.5 : state.model.accuracy[idx]);
+      return { word, idx, acc };
+    })
+    .filter(Boolean);
 }
 
-function renderWordList(el, rows) {
-  if (!el) return;
-  if (rows.length === 0) {
-    el.innerHTML = `<p class="meta">No words found in this category.</p>`;
-    return;
-  }
-  el.innerHTML = rows.map((r) => {
-    const source = r.observed ? "observed" : "model";
-    return `<div class="word-item"><strong>${r.word}</strong><br><span class="meta">p_known=${r.p.toFixed(3)} · count=${r.count} · ${source}</span></div>`;
-  }).join("");
-}
-
-function renderNameList(el, rows) {
-  if (!el) return;
-  if (rows.length === 0) {
-    el.innerHTML = `<p class="meta">No proper names were detected under current filters.</p>`;
-    return;
-  }
-  el.innerHTML = rows.map((r) => (
-    `<div class="word-item"><strong>${r.word}</strong><br><span class="meta">count=${r.count}</span></div>`
-  )).join("");
-}
-
-function renderSentences(rows) {
-  if (rows.length === 0) {
-    ui.sentenceList.innerHTML = `<li class="meta">No matching sentences found under the strict criterion.</li>`;
-    return;
-  }
-  ui.sentenceList.innerHTML = rows.map((r) => `<li><span class="meta">[${r.word}, p_known=${r.p.toFixed(3)}]</span><br>${r.sentence}</li>`).join("");
-}
-
-function renderChecklist(quizWords) {
-  const html = quizWords.map((word, idx) => {
-    const checked = state.profile.answers[word] === 1 ? "checked" : "";
-    return `<label class="check-item" for="word_${idx}"><input id="word_${idx}" type="checkbox" data-word="${word}" ${checked} /><span>${word}</span></label>`;
-  }).join("");
-  ui.checklistWrap.innerHTML = `<div class="checklist-grid">${html}</div>`;
-}
-
-function runEstimation() {
-  const ids = [];
-  const labels = [];
-  for (const w of Object.keys(state.profile.answers)) {
-    const idx = state.model.wordToIdx.get(w);
-    if (idx != null) {
-      ids.push(idx);
-      labels.push(state.profile.answers[w]);
-    }
-  }
+function getQuizWordsAdaptiveUncertaintyLightRandom(questionCount, rng) {
+  const q = Math.max(20, Math.min(200, questionCount));
+  const candidateInfo = getCandidatePool();
+  if (candidateInfo.length <= q) return candidateInfo.map((x) => x.word);
+  const answered = new Set(Object.keys(state.activeProfile.observed));
+  let pool = candidateInfo.filter((x) => !answered.has(x.word));
+  if (pool.length < q) pool = candidateInfo;
+  const { ids, labels } = getObservedPairs();
   const theta = estimateTheta(ids, labels);
-  const analysis = analyzeBook(theta);
-
-  renderStats(analysis);
-  renderWordList(ui.knownList, analysis.knownRows);
-  renderWordList(ui.unknownList, analysis.unknownRows);
-  renderNameList(ui.nameList, analysis.detectedNames);
-  renderSentences(analysis.oneUnknownSentences);
-
-  ui.resultsSection.classList.remove("hidden");
-  ui.addWordsSection.classList.remove("hidden");
-  ui.statusText.textContent = `Profile '${state.currentNickname}' ready. Model: ${state.profile.modelKey}. Strategy: ${state.profile.strategy}. Observed: ${ids.length}.`;
-}
-
-function runEstimationSafe() {
-  try {
-    runEstimation();
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    ui.statusText.textContent = `Failed to run estimation: ${message}`;
-    console.error(err);
-  }
-}
-
-function startChecklist() {
-  const q = Number(ui.questionCount.value);
-  const strategy = ui.quizStrategy.value;
-  state.profile.questionCount = q;
-  state.profile.strategy = strategy;
-  saveCurrentProfile();
-
-  state.totalQuestionCount = q;
-  state.currentBatch = 0;
-  state.quizSeed = hashStringToSeed(`${state.currentNickname}|${q}|${Date.now()}|${strategy}`);
-  state.isAdaptiveQuiz = isAdaptiveStrategy(strategy);
-
-  if (state.isAdaptiveQuiz) {
-    state.quizWords = [];
-  } else {
-    state.quizWords = getQuizWords(q, strategy);
-  }
-
-  loadNextBatch();
-
-  ui.quizSection.classList.remove("hidden");
-  ui.resultsSection.classList.add("hidden");
-  ui.addWordsSection.classList.add("hidden");
-}
-
-function loadNextBatch() {
-  const batchStart = state.currentBatch * state.batchSize;
-  const batchEnd = Math.min(batchStart + state.batchSize, state.totalQuestionCount);
-  const remainingTotal = state.totalQuestionCount - batchStart;
-  const batchCount = Math.ceil(state.totalQuestionCount / state.batchSize);
-
-  let batchWords;
-  if (state.isAdaptiveQuiz) {
-    const batchSeed = hashStringToSeed(`${state.quizSeed}|batch${state.currentBatch}`);
-    const rng = createRng(batchSeed);
-    const toAsk = Math.min(state.batchSize, remainingTotal);
-    batchWords = getAdaptiveBatchWords(toAsk, state.profile.strategy, rng);
-    state.quizWords.push(...batchWords);
-  } else {
-    batchWords = state.quizWords.slice(batchStart, batchEnd);
-  }
-
-  renderChecklist(batchWords);
-
-  const isLastBatch = batchEnd >= state.totalQuestionCount;
-  ui.submitChecklistBtn.textContent = isLastBatch ? "Submit Answers" : "Next Batch";
-  ui.quizProgress.textContent = `Batch ${state.currentBatch + 1} of ${batchCount} (${batchWords.length} words). Strategy: ${state.profile.strategy}. Total observed: ${Object.keys(state.profile.answers).length}.`;
-}
-
-function submitBatch() {
-  const checks = ui.checklistWrap.querySelectorAll("input[type='checkbox'][data-word]");
-  for (const item of checks) {
-    const word = item.getAttribute("data-word");
-    state.profile.answers[word] = item.checked ? 1 : 0;
-  }
-  saveCurrentProfile();
-
-  state.currentBatch++;
-  const nextBatchStart = state.currentBatch * state.batchSize;
-
-  if (nextBatchStart < state.totalQuestionCount) {
-    loadNextBatch();
-  } else {
-    ui.quizSection.classList.add("hidden");
-    ui.statusText.textContent = "Processing answers and analyzing book...";
-    setTimeout(() => {
-      runEstimationSafe();
-    }, 0);
-  }
-}
-
-function showSavedAnalysis() {
-  if (!state.model) {
-    ui.statusText.textContent = "Model is not loaded yet.";
-    return;
-  }
-  if (!state.bookText) {
-    ui.statusText.textContent = "Book text is not loaded yet.";
-    return;
-  }
-  runEstimationSafe();
-}
-
-function parseAddWordsInput(raw) {
+  const scored = pool.map((x) => {
+    const p = predictProba(theta, x.idx);
+    return { ...x, score: -Math.abs(p - 0.5) };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  const topK = 3;
+  const temperature = 0.03;
   const out = [];
-  const lines = raw.split(/[\n,]+/);
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const parts = trimmed.split("=");
-    if (parts.length !== 2) continue;
-    const rawWord = parts[0].trim();
-    const rawTokenMatch = rawWord.match(WORD_TOKEN_RE);
-    if (rawTokenMatch == null) continue;
-    const token = rawTokenMatch[0];
-    const labelRaw = parts[1].trim().toLowerCase();
-    let label = null;
-    if (labelRaw === "known" || labelRaw === "1" || labelRaw === "y" || labelRaw === "yes" || labelRaw === "k") label = 1;
-    if (labelRaw === "unknown" || labelRaw === "0" || labelRaw === "n" || labelRaw === "no" || labelRaw === "u") label = 0;
-    if (token && label !== null) out.push([token, label]);
+  const available = scored.map((x, idx) => ({ ...x, _poolIndex: idx }));
+  for (let i = 0; i < Math.min(q, available.length); i += 1) {
+    const candidates = available.slice(0, Math.min(topK, available.length));
+    const maxScore = Math.max(...candidates.map((c) => c.score));
+    const logits = candidates.map((c) => (c.score - maxScore) / temperature);
+    const expLogits = logits.map((l) => Math.exp(Math.max(-60, Math.min(60, l))));
+    const sumExp = expLogits.reduce((a, b) => a + b, 0);
+    const probs = expLogits.map((e) => e / sumExp);
+    let r = rng();
+    let chosenIdx = 0;
+    for (let j = 0; j < probs.length; j += 1) {
+      r -= probs[j];
+      if (r <= 0) { chosenIdx = j; break; }
+    }
+    const removedPoolIndex = candidates[chosenIdx]._poolIndex;
+    out.push(candidates[chosenIdx].word);
+    available.splice(removedPoolIndex, 1);
+    available.forEach((x, idx) => { x._poolIndex = idx; });
   }
   return out;
 }
 
-function submitAddWords() {
-  const raw = ui.addWordsTextarea.value;
-  const entries = parseAddWordsInput(raw);
-  if (entries.length === 0) {
-    ui.addWordsStatus.textContent = "No valid entries found. Use format: word=known or word=unknown.";
+function pickQuizWords(quizSize) {
+  const seed = hashStringToSeed(`${state.activeProfile.name}|${quizSize}|${Date.now()}`);
+  const rng = createRng(seed);
+  return getQuizWordsAdaptiveUncertaintyLightRandom(quizSize, rng);
+}
+
+function getDb() {
+  if (typeof indexedDB === "undefined") return Promise.resolve(null);
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(BOOK_DB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(BOOK_STORE)) db.createObjectStore(BOOK_STORE, { keyPath: "id" });
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function dbPutBook(book) {
+  const db = await getDb();
+  if (!db) {
+    const raw = localStorage.getItem("fallback_books_v1");
+    const arr = raw ? JSON.parse(raw) : [];
+    const filtered = arr.filter((x) => x.id !== book.id);
+    filtered.push(book);
+    localStorage.setItem("fallback_books_v1", JSON.stringify(filtered));
     return;
   }
-  let added = 0;
-  let updated = 0;
-  let skippedProper = 0;
-  for (const [rawWord, label] of entries) {
-    const tagged = tagSentenceTerms(rawWord);
-    if (tagged.length === 0) continue;
-    const { tokens, properFlags } = contextualDeinflectTaggedTerms(tagged.slice(0, 1), state.model.wordToIdx, true, null);
-    if (properFlags[0]) {
-      skippedProper += 1;
-      continue;
-    }
-    const word = tokens[0];
-    if (!word) continue;
-    if (!state.model.wordToIdx.has(word)) continue;
-    if (Object.prototype.hasOwnProperty.call(state.profile.answers, word)) {
-      updated++;
-    } else {
-      added++;
-    }
-    state.profile.answers[word] = label;
-  }
-  saveCurrentProfile();
-  const properSuffix = skippedProper > 0 ? ` Skipped ${skippedProper} proper-noun entr${skippedProper === 1 ? "y" : "ies"}.` : "";
-  ui.addWordsStatus.textContent = `Added ${added} new label(s), updated ${updated}. Total observed: ${Object.keys(state.profile.answers).length}.${properSuffix}`;
-  ui.addWordsTextarea.value = "";
-  // Re-run estimation if results are visible
-  if (!ui.resultsSection.classList.contains("hidden")) {
-    runEstimationSafe();
-  }
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(BOOK_STORE, "readwrite");
+    tx.objectStore(BOOK_STORE).put(book);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
 }
 
-async function switchModel() {
-  const modelKey = ui.modelSelect.value;
-  state.profile.modelKey = modelKey;
-  saveCurrentProfile();
-  ui.statusText.textContent = `Loading model: ${modelKey} ...`;
-  try {
-    await loadData(modelKey);
-    ui.statusText.textContent = `Model loaded: ${state.model.model_name || modelKey}. Profile: ${state.currentNickname}.`;
-    if (!ui.resultsSection.classList.contains("hidden")) {
-      runEstimationSafe();
-    }
-  } catch (err) {
-    ui.statusText.textContent = `Failed to load model ${modelKey}: ${err.message}`;
-  }
-}
-
-function switchProfile() {
-  state.currentNickname = safeNickname(ui.nicknameInput.value);
-  ui.nicknameInput.value = state.currentNickname;
-  loadCurrentProfile();
-  initControls();
-  if (ui.profilesListText) {
-    ui.profilesListText.textContent = "";
-    ui.profilesListText.classList.add("hidden");
-  }
-  ui.statusText.textContent = `Using profile '${state.currentNickname}'. Saved answers: ${Object.keys(state.profile.answers).length}.`;
-  ui.quizSection.classList.add("hidden");
-  ui.resultsSection.classList.add("hidden");
-  ui.addWordsSection.classList.add("hidden");
-}
-
-function listProfiles() {
-  const names = Object.keys(state.profiles.profiles).sort((a, b) => a.localeCompare(b));
-  if (names.length === 0) {
-    if (ui.profilesListText) {
-      ui.profilesListText.textContent = "No saved profiles found.";
-      ui.profilesListText.classList.remove("hidden");
-    }
+async function dbDeleteBook(id) {
+  const db = await getDb();
+  if (!db) {
+    const raw = localStorage.getItem("fallback_books_v1");
+    const arr = raw ? JSON.parse(raw) : [];
+    localStorage.setItem("fallback_books_v1", JSON.stringify(arr.filter((x) => x.id !== id)));
     return;
   }
-  const decorated = names.map((name) => (name === state.currentNickname ? `${name} (current)` : name));
-  if (ui.profilesListText) {
-    ui.profilesListText.textContent = `Saved profiles (${names.length}): ${decorated.join(", ")}`;
-    ui.profilesListText.classList.remove("hidden");
-  }
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(BOOK_STORE, "readwrite");
+    tx.objectStore(BOOK_STORE).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
 }
 
-function resetProfile() {
-  const confirmed = window.confirm(`Reset profile '${state.currentNickname}'? This will clear all saved answers for this profile.`);
-  if (!confirmed) return;
-  state.profile = {
-    answers: {},
-    questionCount: Number(ui.questionCount.value) || 100,
-    modelKey: ui.modelSelect.value || MODEL_DEFAULT,
-    strategy: ui.quizStrategy.value || STRATEGY_DEFAULT,
+async function dbListBooks() {
+  const db = await getDb();
+  if (!db) {
+    const raw = localStorage.getItem("fallback_books_v1");
+    return raw ? JSON.parse(raw) : [];
+  }
+  return await new Promise((resolve, reject) => {
+    const tx = db.transaction(BOOK_STORE, "readonly");
+    const req = tx.objectStore(BOOK_STORE).getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function parseTxtBook(name, text) {
+  const chapterRegex = /^\s*(chapter\s+\d+.*)$/gim;
+  const matches = [...text.matchAll(chapterRegex)];
+  let chapters = [];
+  if (matches.length === 0) {
+    chapters = [{ title: "Chapter 1", text }];
+  } else {
+    for (let i = 0; i < matches.length; i += 1) {
+      const start = matches[i].index;
+      const end = i + 1 < matches.length ? matches[i + 1].index : text.length;
+      chapters.push({ title: matches[i][1].trim(), text: text.slice(start, end) });
+    }
+  }
+  return {
+    id: `book_${hashStringToSeed(name + text.length)}`,
+    title: name,
+    format: "txt",
+    chapters: chapters.map((c, idx) => {
+      const paragraphs = c.text.split(/\n\s*\n+/).map((p) => p.replace(/\s+/g, " ").trim()).filter(Boolean);
+      return { id: `ch_${idx + 1}`, title: c.title, paragraphs };
+    }),
+    addedAt: Date.now(),
   };
-  saveCurrentProfile();
-  ui.quizSection.classList.add("hidden");
-  ui.resultsSection.classList.add("hidden");
-  ui.addWordsSection.classList.add("hidden");
-  ui.statusText.textContent = `Profile '${state.currentNickname}' reset.`;
+}
+
+async function parseEpubBook(file) {
+  if (typeof JSZip === "undefined") {
+    throw new Error("EPUB parser dependency is missing. Reload and try again.");
+  }
+
+  const normalizeSpaces = (value) => String(value || "").replace(/\s+/g, " ").trim();
+  const sanitizePath = (value) => String(value || "").replace(/\\/g, "/").replace(/^\/+/, "");
+  const splitPath = (value) => sanitizePath(value).split("/").filter(Boolean);
+  const joinPath = (parts) => parts.join("/");
+  const dirname = (value) => {
+    const parts = splitPath(value);
+    if (parts.length <= 1) return "";
+    return joinPath(parts.slice(0, -1));
+  };
+  const resolveRelativePath = (baseFile, href) => {
+    const hrefClean = sanitizePath(href);
+    if (!hrefClean) return "";
+    const baseDir = splitPath(dirname(baseFile));
+    const hrefParts = splitPath(hrefClean);
+    const out = [...baseDir];
+    for (const part of hrefParts) {
+      if (part === ".") continue;
+      if (part === "..") {
+        if (out.length > 0) out.pop();
+        continue;
+      }
+      out.push(part);
+    }
+    return joinPath(out);
+  };
+  const parseXml = (xmlText) => {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(xmlText, "application/xml");
+    if (doc.querySelector("parsererror")) {
+      throw new Error("Invalid EPUB XML.");
+    }
+    return doc;
+  };
+  const parseHtml = (htmlText) => {
+    const parser = new DOMParser();
+    return parser.parseFromString(htmlText, "text/html");
+  };
+  const pickTitle = (doc, fallback) => {
+    const direct = doc.querySelector("h1, h2, title");
+    const text = normalizeSpaces(direct ? direct.textContent : "");
+    return text || fallback;
+  };
+  const extractParagraphs = (doc) => {
+    const out = [];
+    const paragraphNodes = [...doc.querySelectorAll("p")];
+    for (const node of paragraphNodes) {
+      const text = normalizeSpaces(node.textContent || "");
+      if (text.length > 0) out.push(text);
+    }
+    if (out.length > 0) return out;
+
+    const bodyText = normalizeSpaces(doc.body ? doc.body.textContent : "");
+    if (!bodyText) return [];
+    return bodyText
+      .split(/(?<=[.!?])\s+/)
+      .map((row) => normalizeSpaces(row))
+      .filter((row) => row.length > 0);
+  };
+
+  const buffer = await file.arrayBuffer();
+  const zip = await JSZip.loadAsync(buffer);
+  const containerEntry = zip.file("META-INF/container.xml");
+  if (!containerEntry) {
+    throw new Error("EPUB is missing META-INF/container.xml.");
+  }
+
+  const containerXml = await containerEntry.async("text");
+  const containerDoc = parseXml(containerXml);
+  const rootfileNode = containerDoc.querySelector("rootfile");
+  const opfPathRaw = rootfileNode ? rootfileNode.getAttribute("full-path") : "";
+  const opfPath = sanitizePath(opfPathRaw);
+  if (!opfPath) {
+    throw new Error("EPUB package path is missing.");
+  }
+
+  const opfEntry = zip.file(opfPath);
+  if (!opfEntry) {
+    throw new Error("EPUB package document is missing.");
+  }
+
+  const opfXml = await opfEntry.async("text");
+  const opfDoc = parseXml(opfXml);
+  const itemNodes = [...opfDoc.querySelectorAll("manifest > item")];
+  const manifestById = new Map();
+  for (const item of itemNodes) {
+    const id = item.getAttribute("id");
+    const href = item.getAttribute("href");
+    if (!id || !href) continue;
+    const mediaType = item.getAttribute("media-type") || "";
+    manifestById.set(id, { href, mediaType });
+  }
+
+  const spineNodes = [...opfDoc.querySelectorAll("spine > itemref")];
+  const spineEntries = spineNodes
+    .map((node) => node.getAttribute("idref"))
+    .filter(Boolean)
+    .map((idref) => ({ idref, item: manifestById.get(idref) }))
+    .filter((row) => row.item && row.item.href);
+
+  if (spineEntries.length === 0) {
+    throw new Error("EPUB spine is empty.");
+  }
+
+  const chapters = [];
+  for (let i = 0; i < spineEntries.length; i += 1) {
+    const entry = spineEntries[i];
+    const contentPath = resolveRelativePath(opfPath, entry.item.href);
+    const fileEntry = zip.file(contentPath);
+    if (!fileEntry) continue;
+    const content = await fileEntry.async("text");
+    const doc = parseHtml(content);
+    const title = pickTitle(doc, `Chapter ${i + 1}`);
+    const paragraphs = extractParagraphs(doc);
+    if (paragraphs.length === 0) continue;
+    chapters.push({
+      id: `ch_${i + 1}`,
+      title,
+      paragraphs,
+    });
+  }
+
+  if (chapters.length === 0) {
+    throw new Error("No readable chapter content found in EPUB.");
+  }
+
+  const fallbackTitle = String(file.name || "Untitled EPUB").replace(/\.epub$/i, "").trim() || "Untitled EPUB";
+  const metaTitleNode = opfDoc.querySelector("metadata > title, metadata > dc\\:title");
+  const title = normalizeSpaces(metaTitleNode ? metaTitleNode.textContent : "") || fallbackTitle;
+
+  return {
+    id: `book_${hashStringToSeed(`${file.name}|${file.size}|${chapters.length}`)}`,
+    title,
+    format: "epub",
+    chapters,
+    addedAt: Date.now(),
+  };
+}
+
+function computeUnknownSet(book) {
+  const { ids, labels } = getObservedPairs();
+  const theta = estimateTheta(ids, labels);
+  const threshold = Number(state.activeProfile.settings.knownThreshold) || DEFAULT_THRESHOLD;
+  const unknown = new Set();
+  for (const word of state.model.words) {
+    const idx = state.model.wordToIdx.get(word);
+    const { p } = effectiveWordBelief(theta, word, idx);
+    if (p < threshold) unknown.add(word);
+  }
+  return { unknown, theta, threshold };
+}
+
+function analyzeScopeText(text, unknownSet) {
+  const taggedSentenceRows = buildTaggedSentences(text);
+  const taggedSentences = taggedSentenceRows.map((row) => row.taggedTerms);
+  const properLexicon = buildHighConfidenceProperNounLexicon(taggedSentences);
+  const freq = new Map();
+  const sentenceStats = new Map();
+
+  for (const row of taggedSentenceRows) {
+    const terms = contextualDeinflectTaggedTerms(row.taggedTerms, state.model.wordToIdx, true, properLexicon).tokens;
+    const sentenceWords = [];
+    for (const term of terms) {
+      if (!term) continue;
+      if (!state.model.wordToIdx.has(term)) continue;
+      sentenceWords.push(term);
+      if (unknownSet.has(term)) freq.set(term, (freq.get(term) || 0) + 1);
+    }
+    const unknownInSentence = [...new Set(sentenceWords.filter((w) => unknownSet.has(w)))];
+    for (const word of unknownInSentence) {
+      if (!sentenceStats.has(word)) sentenceStats.set(word, []);
+      sentenceStats.get(word).push({ sentence: row.sentence, unknownCount: unknownInSentence.length, knownCount: sentenceWords.length - unknownInSentence.length });
+    }
+  }
+
+  const rows = [];
+  let maxFreq = 1;
+  for (const count of freq.values()) if (count > maxFreq) maxFreq = count;
+
+  for (const [word, count] of freq.entries()) {
+    const contexts = sentenceStats.get(word) || [];
+    contexts.sort((a, b) => (a.unknownCount - b.unknownCount) || (b.knownCount - a.knownCount));
+    const best = contexts.slice(0, 3);
+    const oneUnknownHits = contexts.filter((c) => c.unknownCount === 1).length;
+    const sentenceScore = contexts.length === 0 ? 0 : (oneUnknownHits / contexts.length);
+    const freqScore = Math.log(1 + count) / Math.log(1 + maxFreq);
+    const score = 0.65 * freqScore + 0.35 * sentenceScore;
+    rows.push({ word, count, score, examples: best.map((x) => x.sentence) });
+  }
+
+  rows.sort((a, b) => b.score - a.score || b.count - a.count || a.word.localeCompare(b.word));
+  return rows;
+}
+
+function getLexiconEntry(word) {
+  return {
+    word,
+    ipa: `/${word}/`,
+    definition: "Definition unavailable in this build.",
+  };
+}
+
+function renderSuggestions(container, title, rows) {
+  if (rows.length === 0) {
+    container.innerHTML = `<h3>${title}</h3><p class=\"meta\">No suggestions in this scope.</p>`;
+    container.classList.remove("hidden");
+    return;
+  }
+  container.innerHTML = `<h3>${title}</h3>${rows.slice(0, 30).map((r) => `<div class=\"suggestion-item\"><strong>${r.word}</strong> <span class=\"meta\">score=${r.score.toFixed(3)} · count=${r.count}</span>${r.examples.map((s) => `<p>${escapeHtml(s)}</p>`).join("")}</div>`).join("")}`;
+  container.classList.remove("hidden");
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function renderView(name) {
+  ui.libraryView.classList.toggle("hidden", name !== "library");
+  ui.readerView.classList.toggle("hidden", name !== "reader");
+  ui.profileView.classList.toggle("hidden", name !== "profile");
+}
+
+function renderOnboardingBanner() {
+  const observedCount = Object.keys(state.activeProfile.observed).length;
+  if (observedCount > 0) {
+    ui.onboardingBanner.classList.add("hidden");
+    return;
+  }
+  ui.onboardingBanner.innerHTML = `<div class=\"notice-head\"><strong>Start with the quiz</strong></div><p class=\"notice-copy\">This profile has no observed words yet. Take the calibration quiz for stronger reading assistance.</p><div class=\"notice-actions\"><button id=\"bannerTakeQuizBtn\" class=\"btn\" type=\"button\">Take quiz</button></div>`;
+  ui.onboardingBanner.classList.remove("hidden");
+  document.getElementById("bannerTakeQuizBtn").addEventListener("click", () => {
+    renderView("profile");
+    startQuizFlow();
+  });
+}
+
+function renderProfiles() {
+  const names = Object.keys(state.profiles.items).sort((a, b) => a.localeCompare(b));
+  ui.profilesText.textContent = names.length === 0 ? "No profiles." : `Profiles: ${names.map((n) => n === state.profiles.current ? `${n} (current)` : n).join(", ")}`;
+  ui.profileNameInput.value = state.profiles.current;
+  ui.quizCountInput.value = String(state.activeProfile.settings.quizSize || DEFAULT_QUIZ_SIZE);
+}
+
+function renderLibrary() {
+  if (state.books.length === 0) {
+    ui.libraryList.innerHTML = `<p class="meta">No books in library yet. Import .txt or .epub.</p>`;
+    return;
+  }
+  ui.libraryList.innerHTML = state.books.map((book) => `
+    <div class="library-item">
+      <div>
+        <strong>${escapeHtml(book.title)}</strong>
+        <div class="meta">${book.format.toUpperCase()} · ${book.chapters.length} chapter(s)</div>
+      </div>
+      <div class="actions">
+        <button class="btn" data-open-book="${book.id}" type="button">Open</button>
+        <button class="btn" data-suggest-book="${book.id}" type="button">Suggest Whole Book</button>
+        <button class="btn danger" data-delete-book="${book.id}" type="button">Delete</button>
+      </div>
+    </div>
+  `).join("");
+
+  ui.libraryList.querySelectorAll("[data-open-book]").forEach((btn) => btn.addEventListener("click", () => openBook(btn.getAttribute("data-open-book"))));
+  ui.libraryList.querySelectorAll("[data-suggest-book]").forEach((btn) => btn.addEventListener("click", () => suggestWholeBook(btn.getAttribute("data-suggest-book"))));
+  ui.libraryList.querySelectorAll("[data-delete-book]").forEach((btn) => btn.addEventListener("click", () => deleteBook(btn.getAttribute("data-delete-book"))));
+}
+
+function renderReader() {
+  const book = state.books.find((b) => b.id === state.currentBookId);
+  if (!book) {
+    ui.readerBookTitle.textContent = "No book open";
+    ui.readerChapterTitle.textContent = "";
+    ui.chapterNav.innerHTML = "";
+    ui.readerParagraphs.innerHTML = "";
+    return;
+  }
+
+  const chapter = book.chapters[state.currentChapterIdx] || book.chapters[0];
+  ui.readerBookTitle.textContent = book.title;
+  ui.readerChapterTitle.textContent = chapter.title;
+
+  ui.chapterNav.innerHTML = book.chapters.map((c, idx) => `<button class="chapter-btn ${idx === state.currentChapterIdx ? "active" : ""}" data-chapter-idx="${idx}" type="button">${escapeHtml(c.title)}</button>`).join("");
+  ui.chapterNav.querySelectorAll("[data-chapter-idx]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.currentChapterIdx = Number(btn.getAttribute("data-chapter-idx"));
+      renderReader();
+    });
+  });
+
+  const { unknown, theta, threshold } = computeUnknownSet(book);
+  const properLexicon = buildHighConfidenceProperNounLexicon(chapter.paragraphs.map((p) => tagSentenceTerms(p)));
+
+  ui.readerParagraphs.innerHTML = chapter.paragraphs.map((paragraph, idx) => {
+    const tagged = tagSentenceTerms(paragraph);
+    const deinflected = contextualDeinflectTaggedTerms(tagged, state.model.wordToIdx, true, properLexicon).tokens;
+    const unknownWords = [...new Set(deinflected.filter((w) => w && unknown.has(w)))];
+
+    const ranked = unknownWords.map((word) => {
+      const freq = deinflected.filter((x) => x === word).length;
+      const idxWord = state.model.wordToIdx.get(word);
+      const { p } = effectiveWordBelief(theta, word, idxWord);
+      const importance = 0.7 * freq + 0.3 * (1 - p) / Math.max(1e-6, 1 - threshold);
+      return { word, importance };
+    }).sort((a, b) => b.importance - a.importance).slice(0, 2);
+
+    const cards = state.assistEnabled ? ranked.map(({ word }) => {
+      const entry = getLexiconEntry(word);
+      return `<article class="word-card"><h4>${entry.word}</h4><div class="ipa">${entry.ipa || "[N/A]"}</div><p>${escapeHtml(entry.definition)}</p><div class="actions"><button class="btn" data-mark-word="${word}" data-mark-label="1" data-source="para_${idx}" type="button">Known</button><button class="btn" data-mark-word="${word}" data-mark-label="0" data-source="para_${idx}" type="button">Unknown</button></div></article>`;
+    }).join("") : "";
+
+    return `<div class="paragraph-row"><div class="paragraph-text">${escapeHtml(paragraph)}</div><div class="assist-col">${cards}</div></div>`;
+  }).join("");
+
+  ui.readerParagraphs.querySelectorAll("[data-mark-word]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const word = btn.getAttribute("data-mark-word");
+      const label = Number(btn.getAttribute("data-mark-label"));
+      state.activeProfile.observed[word] = label;
+      saveProfilesStore();
+      renderOnboardingBanner();
+      renderReader();
+      ui.statusText.textContent = `Updated '${word}' as ${label === 1 ? "known" : "unknown"}.`;
+    });
+  });
+}
+
+function openBook(bookId) {
+  state.currentBookId = bookId;
+  state.currentChapterIdx = 0;
+  renderView("reader");
+  renderReader();
+}
+
+function getCurrentChapterRemainingText(book) {
+  const chapter = book.chapters[state.currentChapterIdx];
+  if (!chapter) return "";
+  return chapter.paragraphs.join("\n\n");
+}
+
+function suggestRemaining() {
+  const book = state.books.find((b) => b.id === state.currentBookId);
+  if (!book) {
+    ui.statusText.textContent = "Open a book first.";
+    return;
+  }
+  const { unknown } = computeUnknownSet(book);
+  const text = getCurrentChapterRemainingText(book);
+  const rows = analyzeScopeText(text, unknown);
+  renderSuggestions(ui.readerSuggestions, "Suggestions For Remaining Chapter", rows);
+}
+
+function suggestWholeBook(bookId) {
+  const book = state.books.find((b) => b.id === bookId);
+  if (!book) return;
+  const { unknown } = computeUnknownSet(book);
+  const text = book.chapters.map((c) => c.paragraphs.join("\n\n")).join("\n\n");
+  const rows = analyzeScopeText(text, unknown);
+  renderSuggestions(ui.librarySuggestions, `Whole-book suggestions: ${book.title}`, rows);
+}
+
+async function deleteBook(bookId) {
+  await dbDeleteBook(bookId);
+  state.books = state.books.filter((b) => b.id !== bookId);
+  if (state.currentBookId === bookId) state.currentBookId = "";
+  renderLibrary();
+  renderReader();
+}
+
+function startQuizFlow() {
+  const q = Math.max(20, Math.min(200, Number(ui.quizCountInput.value) || DEFAULT_QUIZ_SIZE));
+  state.activeProfile.settings.quizSize = q;
+  state.activeProfile.quizMeta.strategy = QUIZ_STRATEGY;
+  state.activeProfile.quizMeta.lastTakenAt = Date.now();
+  state.quizWords = pickQuizWords(q);
+  state.quizBatchIndex = 0;
+  ui.quizSection.classList.remove("hidden");
+  renderQuizBatch();
+  saveProfilesStore();
+}
+
+function renderQuizBatch() {
+  const start = state.quizBatchIndex * state.quizBatchSize;
+  const end = Math.min(start + state.quizBatchSize, state.quizWords.length);
+  const words = state.quizWords.slice(start, end);
+  ui.quizProgress.textContent = `Batch ${state.quizBatchIndex + 1} of ${Math.ceil(state.quizWords.length / state.quizBatchSize)} (${words.length} words)`;
+  ui.checklistWrap.innerHTML = `<div class="checklist-grid">${words.map((word, idx) => `<label class="check-item" for="quiz_${idx}"><input id="quiz_${idx}" type="checkbox" data-word="${word}" ${state.activeProfile.observed[word] === 1 ? "checked" : ""} /><span>${word}</span></label>`).join("")}</div>`;
+  const isLast = end >= state.quizWords.length;
+  ui.submitChecklistBtn.textContent = isLast ? "Finish Quiz" : "Next Batch";
+}
+
+function submitQuizBatch() {
+  const checks = ui.checklistWrap.querySelectorAll("input[type='checkbox'][data-word]");
+  for (const item of checks) {
+    const word = item.getAttribute("data-word");
+    state.activeProfile.observed[word] = item.checked ? 1 : 0;
+  }
+  saveProfilesStore();
+  state.quizBatchIndex += 1;
+  if ((state.quizBatchIndex * state.quizBatchSize) >= state.quizWords.length) {
+    ui.quizSection.classList.add("hidden");
+    ui.statusText.textContent = `Quiz complete. Observed words: ${Object.keys(state.activeProfile.observed).length}.`;
+    renderOnboardingBanner();
+    renderReader();
+    return;
+  }
+  renderQuizBatch();
+}
+
+function exportCurrentProfile() {
+  const payload = {
+    version: 2,
+    profile: state.activeProfile,
+    exportedAt: new Date().toISOString(),
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${state.activeProfile.name}_profile.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function importProfileFromFile(file) {
+  const text = await file.text();
+  const parsed = JSON.parse(text);
+  if (!parsed || parsed.version !== 2 || !parsed.profile || typeof parsed.profile.name !== "string") {
+    throw new Error("Invalid profile file format.");
+  }
+  const name = safeNickname(parsed.profile.name);
+  state.profiles.items[name] = parsed.profile;
+  state.profiles.current = name;
+  state.activeProfile = state.profiles.items[name];
+  saveProfilesStore();
+  renderProfiles();
+  renderOnboardingBanner();
+  renderReader();
+}
+
+async function loadModel() {
+  const res = await fetch(`./data/${MODEL_KEY}_model_data.json`);
+  if (!res.ok) throw new Error(`Failed to load model ${MODEL_KEY}`);
+  state.model = await res.json();
+  state.model.wordToIdx = new Map(state.model.words.map((w, i) => [w, i]));
+  state.model.vocabSet = new Set(state.model.words);
+  state.model.b = state.model.accuracy.map((a) => {
+    const p = a == null ? 0.5 : clip01(a);
+    return -logit(p);
+  });
+}
+
+async function loadLemmaDict() {
+  try {
+    const res = await fetch("./data/lemma_dict.json");
+    if (res.ok) state.lemmaDict = await res.json();
+  } catch {
+    state.lemmaDict = {};
+  }
+}
+
+async function seedLibraryIfEmpty() {
+  const books = await dbListBooks();
+  if (books.length > 0) {
+    state.books = books;
+    return;
+  }
+  const res = await fetch("./data/hitchhikers_guide.txt");
+  if (!res.ok) {
+    state.books = [];
+    return;
+  }
+  const text = await res.text();
+  const sample = parseTxtBook("The Hitchhiker's Guide to the Galaxy", text);
+  await dbPutBook(sample);
+  state.books = [sample];
+}
+
+function bindEvents() {
+  ui.goLibraryBtn.addEventListener("click", () => renderView("library"));
+  ui.goReaderBtn.addEventListener("click", () => renderView("reader"));
+  ui.goProfileBtn.addEventListener("click", () => renderView("profile"));
+
+  ui.createProfileBtn.addEventListener("click", () => {
+    const name = safeNickname(ui.profileNameInput.value);
+    ensureProfile(name);
+    renderProfiles();
+    renderOnboardingBanner();
+    renderReader();
+  });
+
+  ui.deleteProfileBtn.addEventListener("click", () => {
+    const name = safeNickname(ui.profileNameInput.value || state.profiles.current);
+    if (!state.profiles.items[name]) return;
+    delete state.profiles.items[name];
+    const names = Object.keys(state.profiles.items).sort((a, b) => a.localeCompare(b));
+    ensureProfile(names[0] || DEFAULT_PROFILE_NAME);
+    renderProfiles();
+    renderOnboardingBanner();
+    renderReader();
+  });
+
+  ui.startQuizBtn.addEventListener("click", startQuizFlow);
+  ui.submitChecklistBtn.addEventListener("click", submitQuizBatch);
+  ui.exportProfileBtn.addEventListener("click", exportCurrentProfile);
+  ui.importProfileInput.addEventListener("change", async (ev) => {
+    const file = ev.target.files && ev.target.files[0];
+    if (!file) return;
+    try {
+      await importProfileFromFile(file);
+      ui.statusText.textContent = "Profile imported.";
+    } catch (err) {
+      ui.statusText.textContent = `Failed to import profile: ${err.message}`;
+    }
+  });
+
+  ui.toggleAssistBtn.addEventListener("click", () => {
+    state.assistEnabled = !state.assistEnabled;
+    saveUiPrefs();
+    renderReader();
+  });
+
+  ui.suggestRemainingBtn.addEventListener("click", suggestRemaining);
+
+  ui.bookUpload.addEventListener("change", async (ev) => {
+    const file = ev.target.files && ev.target.files[0];
+    if (!file) return;
+    try {
+      let book;
+      if (file.name.toLowerCase().endsWith(".txt")) {
+        const text = await file.text();
+        book = parseTxtBook(file.name, text);
+      } else if (file.name.toLowerCase().endsWith(".epub")) {
+        book = await parseEpubBook(file);
+      } else {
+        throw new Error("Unsupported file format. Use .txt or .epub.");
+      }
+      await dbPutBook(book);
+      state.books = await dbListBooks();
+      renderLibrary();
+      ui.statusText.textContent = `Imported ${book.title}.`;
+    } catch (err) {
+      ui.statusText.textContent = `Import failed: ${err.message}`;
+    }
+  });
 }
 
 async function main() {
-  state.currentNickname = state.profiles.currentNickname || "default";
-  ui.nicknameInput.value = state.currentNickname;
-  loadCurrentProfile();
-  initControls();
-
-  ui.statusText.textContent = `Loading model: ${state.profile.modelKey || MODEL_DEFAULT} ...`;
-  await loadData(state.profile.modelKey || MODEL_DEFAULT);
-  await loadDefaultBook();
-  await loadLemmaDict();
-  ui.statusText.textContent = `Data loaded. Model: ${state.model.model_name || state.profile.modelKey}. Profile: ${state.currentNickname}.`;
-
-  ui.questionCount.addEventListener("input", () => {
-    ui.questionCountValue.textContent = ui.questionCount.value;
-  });
-
-  ui.knownThreshold.addEventListener("input", () => {
-    const t = Number(ui.knownThreshold.value);
-    ui.knownThresholdValue.textContent = t.toFixed(2);
-    state.profile.knownThreshold = t;
-    saveCurrentProfile();
-    if (!ui.resultsSection.classList.contains("hidden")) {
-      runEstimationSafe();
-    }
-  });
-
-  ui.modelSelect.addEventListener("change", switchModel);
-  ui.quizStrategy.addEventListener("change", () => {
-    state.profile.strategy = ui.quizStrategy.value;
-    saveCurrentProfile();
-  });
-  ui.loadProfileBtn.addEventListener("click", switchProfile);
-  if (ui.listProfilesBtn) {
-    ui.listProfilesBtn.addEventListener("click", listProfiles);
-  }
-  ui.nicknameInput.addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter") switchProfile();
-  });
-  ui.startBtn.addEventListener("click", startChecklist);
-  if (ui.showAnalysisBtn) {
-    ui.showAnalysisBtn.addEventListener("click", showSavedAnalysis);
-  }
-  ui.submitChecklistBtn.addEventListener("click", submitBatch);
-  ui.resetBtn.addEventListener("click", resetProfile);
-  ui.submitAddWordsBtn.addEventListener("click", submitAddWords);
-  if (ui.bookUpload) {
-    ui.bookUpload.addEventListener("change", handleBookUpload);
-  }
-  if (ui.resetBookBtn) {
-    ui.resetBookBtn.addEventListener("click", resetBook);
-  }
+  loadUiPrefs();
+  state.profiles = loadProfilesStore();
+  ensureProfile(state.profiles.current || DEFAULT_PROFILE_NAME);
+  await Promise.all([loadModel(), loadLemmaDict()]);
+  await seedLibraryIfEmpty();
+  bindEvents();
+  renderProfiles();
+  renderOnboardingBanner();
+  renderLibrary();
+  renderReader();
+  renderView("library");
+  ui.statusText.textContent = `Ready. Model: ${MODEL_KEY}. Profile: ${state.activeProfile.name}.`;
 }
 
 main().catch((err) => {
