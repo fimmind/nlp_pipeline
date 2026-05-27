@@ -370,7 +370,10 @@ function createRng(seed) {
 }
 
 function getCandidatePool() {
-  return state.model.query_pool
+  const adaptivePool = Array.isArray(state.model.adaptive_candidate_pool) && state.model.adaptive_candidate_pool.length > 0
+    ? state.model.adaptive_candidate_pool
+    : state.model.query_pool;
+  return adaptivePool
     .map((word) => {
       const idx = state.model.wordToIdx.get(word);
       if (idx == null) return null;
@@ -389,19 +392,26 @@ function getQuizWordsAdaptiveUncertaintyLightRandom(questionCount, rng) {
   if (pool.length < q) pool = candidateInfo;
   const { ids, labels } = getObservedPairs();
   const theta = estimateTheta(ids, labels);
-  const scored = pool.map((x) => {
+  const scored = pool.map((x, position) => {
     const p = predictProba(theta, x.idx);
-    return { ...x, score: -Math.abs(p - 0.5) };
+    const uncertainty = p * (1 - p);
+    return { ...x, uncertainty, position };
   });
-  scored.sort((a, b) => b.score - a.score);
   const topK = 3;
   const temperature = 0.03;
   const out = [];
-  const available = scored.map((x, idx) => ({ ...x, _poolIndex: idx }));
+  const available = scored.map((_, idx) => idx);
   for (let i = 0; i < Math.min(q, available.length); i += 1) {
-    const candidates = available.slice(0, Math.min(topK, available.length));
-    const maxScore = Math.max(...candidates.map((c) => c.score));
-    const logits = candidates.map((c) => (c.score - maxScore) / temperature);
+    const candidates = [...available]
+      .sort((a, b) => {
+        const uncertaintyDelta = scored[b].uncertainty - scored[a].uncertainty;
+        if (Math.abs(uncertaintyDelta) > 1e-12) return uncertaintyDelta;
+        return scored[a].position - scored[b].position;
+      })
+      .slice(0, Math.min(topK, available.length));
+    const candidateUncertainty = candidates.map((idx) => scored[idx].uncertainty);
+    const maxScore = Math.max(...candidateUncertainty);
+    const logits = candidateUncertainty.map((value) => (value / temperature) - (maxScore / temperature));
     const expLogits = logits.map((l) => Math.exp(Math.max(-60, Math.min(60, l))));
     const sumExp = expLogits.reduce((a, b) => a + b, 0);
     const probs = expLogits.map((e) => e / sumExp);
@@ -411,18 +421,25 @@ function getQuizWordsAdaptiveUncertaintyLightRandom(questionCount, rng) {
       r -= probs[j];
       if (r <= 0) { chosenIdx = j; break; }
     }
-    const removedPoolIndex = candidates[chosenIdx]._poolIndex;
-    out.push(candidates[chosenIdx].word);
-    available.splice(removedPoolIndex, 1);
-    available.forEach((x, idx) => { x._poolIndex = idx; });
+    const chosenScoredIndex = candidates[chosenIdx];
+    out.push(scored[chosenScoredIndex].word);
+    const removalIndex = available.indexOf(chosenScoredIndex);
+    if (removalIndex >= 0) available.splice(removalIndex, 1);
   }
   return out;
 }
 
-function pickQuizWords(quizSize) {
-  const seed = hashStringToSeed(`${state.activeProfile.name}|${quizSize}|${Date.now()}`);
+function pickQuizWords(quizSize, seed) {
   const rng = createRng(seed);
   return getQuizWordsAdaptiveUncertaintyLightRandom(quizSize, rng);
+}
+
+function resolveQuizSeed(quizSize) {
+  const maybeSeed = Number(state.activeProfile.quizMeta.seed);
+  if (Number.isInteger(maybeSeed) && maybeSeed >= 0) return maybeSeed >>> 0;
+  const generated = hashStringToSeed(`${state.activeProfile.name}|${quizSize}|${Date.now()}`);
+  state.activeProfile.quizMeta.seed = generated >>> 0;
+  return generated >>> 0;
 }
 
 function getDb() {
@@ -963,11 +980,16 @@ async function deleteBook(bookId) {
 }
 
 function startQuizFlow() {
+  if (!state.activeProfile.quizMeta || typeof state.activeProfile.quizMeta !== "object") {
+    state.activeProfile.quizMeta = { strategy: QUIZ_STRATEGY, lastTakenAt: null, seed: 0 };
+  }
   const q = Math.max(20, Math.min(200, Number(ui.quizCountInput.value) || DEFAULT_QUIZ_SIZE));
+  const seed = resolveQuizSeed(q);
   state.activeProfile.settings.quizSize = q;
   state.activeProfile.quizMeta.strategy = QUIZ_STRATEGY;
+  state.activeProfile.quizMeta.seed = seed;
   state.activeProfile.quizMeta.lastTakenAt = Date.now();
-  state.quizWords = pickQuizWords(q);
+  state.quizWords = pickQuizWords(q, seed);
   state.quizBatchIndex = 0;
   ui.quizSection.classList.remove("hidden");
   renderQuizBatch();
