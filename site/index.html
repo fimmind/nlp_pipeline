@@ -3,56 +3,131 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Vocabulary Reader Assistant</title>
+  <title>Assisted Reader</title>
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
-  <main class="app">
-    <header class="topbar">
-      <div class="left-actions" aria-label="Primary actions">
+  <main class="ui app-shell" id="appShell">
+    <header class="app-topbar" id="appTopbar">
+      <div class="brand-wrap">
+        <h1>Assisted Reader</h1>
+        <p class="topbar-sub">Calm reading with quiet vocabulary support</p>
+      </div>
+
+      <div class="topbar-actions" aria-label="Primary actions">
         <button id="startQuizBtn" class="btn" type="button">Take quiz</button>
         <label for="bookUpload" class="btn">Add book</label>
         <input id="bookUpload" class="file-input" type="file" accept=".txt,.epub" />
       </div>
 
-      <div class="profile-actions" aria-label="Profile actions">
-        <input id="profileNameInput" type="text" maxlength="40" placeholder="profile" />
+      <div class="profile-actions" aria-label="Profile controls">
+        <input id="profileNameInput" type="text" maxlength="40" placeholder="profile name" />
         <button id="createProfileBtn" class="btn" type="button">Use profile</button>
-        <button id="deleteProfileBtn" class="btn" type="button">Delete</button>
+        <button id="deleteProfileBtn" class="btn ghost" type="button">Delete</button>
       </div>
     </header>
 
-    <section id="onboardingBanner" class="hidden" aria-live="polite"></section>
+    <section id="onboardingView" class="surface onboarding-view hidden" aria-live="polite">
+      <article class="onboarding-card" data-step="welcome">
+        <h2>Read real books with quiet vocabulary assistance</h2>
+        <p>
+          Create a profile, take a short vocabulary check, and start reading with help only where you need it.
+        </p>
+        <div class="row-actions">
+          <button id="onboardingToCreateBtn" class="btn primary" type="button">Create profile</button>
+          <button id="onboardingGuestBtn" class="btn" type="button">Continue as guest</button>
+        </div>
+      </article>
 
-    <section id="libraryView" class="screen library-screen">
-      <div id="libraryList" class="book-list" aria-live="polite"></div>
+      <article class="onboarding-card hidden" data-step="create">
+        <h2>Create profile</h2>
+        <p>Your profile stores reading progress and vocabulary estimates locally in this browser.</p>
+        <div class="onboarding-fields">
+          <label>
+            <span>Profile name</span>
+            <input id="onboardingProfileInput" type="text" maxlength="40" placeholder="your name" />
+          </label>
+          <label>
+            <span>Definition language (optional)</span>
+            <input id="onboardingLanguageInput" type="text" maxlength="30" placeholder="en" />
+          </label>
+          <label>
+            <span>Assistance preference</span>
+            <select id="onboardingAssistInput">
+              <option value="quiet">Quiet</option>
+              <option value="assisted">Assisted</option>
+              <option value="off">Off</option>
+            </select>
+          </label>
+        </div>
+        <div class="row-actions">
+          <button id="onboardingCreateBtn" class="btn primary" type="button">Save profile</button>
+        </div>
+      </article>
+
+      <article class="onboarding-card hidden" data-step="quiz">
+        <h2>Vocabulary check</h2>
+        <p>
+          This short vocabulary check helps the reader decide which words to explain.
+          Choose <strong>Known</strong> only if you recognize the word.
+        </p>
+        <div class="row-actions">
+          <button id="onboardingStartQuizBtn" class="btn primary" type="button">Start vocabulary check</button>
+        </div>
+      </article>
+    </section>
+
+    <section id="libraryView" class="surface home-view hidden">
+      <div class="home-summary">
+        <article class="summary-card">
+          <p class="eyebrow">Profile</p>
+          <h2 id="homeProfileName">No active profile</h2>
+          <p id="profilesText" class="meta"></p>
+        </article>
+
+        <article class="summary-card current-book-card">
+          <p class="eyebrow">Current book</p>
+          <h3 id="homeCurrentBookTitle">No book selected</h3>
+          <p id="homeCurrentBookMeta" class="meta">Import a book to begin.</p>
+          <button id="continueReadingBtn" class="btn primary" type="button">Continue reading</button>
+        </article>
+
+        <article class="summary-card">
+          <p class="eyebrow">Reading support</p>
+          <p id="supportModeText" class="meta">Vocabulary assistance: Quiet</p>
+          <p id="supportLevelText" class="meta">Estimated support level: Not calibrated</p>
+          <button id="goProfileBtn" class="btn" type="button">Profile and settings</button>
+        </article>
+      </div>
+
+      <section class="library-list-wrap">
+        <div class="section-head">
+          <h3>Your books</h3>
+        </div>
+        <div id="libraryList" class="book-list" aria-live="polite"></div>
+      </section>
+
       <article id="librarySuggestions" class="suggestions hidden"></article>
     </section>
 
-    <section id="readerView" class="screen reader-screen hidden">
-      <header class="reader-header">
-        <button id="goLibraryBtn" class="btn" type="button">Back to library</button>
-        <h2 id="readerBookTitle">No book open</h2>
-      </header>
-      <div class="reader-controls">
-        <p id="readerChapterTitle"></p>
-        <div class="reader-actions">
-          <button id="suggestRemainingBtn" class="btn" type="button">Suggest from here</button>
-          <button id="suggestNextBtn" class="btn" type="button">Suggest next chapter</button>
-          <button id="suggestWholeReaderBtn" class="btn" type="button">Suggest whole book</button>
-          <button id="toggleAssistBtn" class="btn" type="button">Assist: on</button>
-        </div>
+    <section id="profileView" class="surface quiz-view hidden">
+      <div class="quiz-head">
+        <h2>Vocabulary check</h2>
+        <p>Help us estimate which words you already know. No need to be perfect.</p>
       </div>
-      <nav id="chapterNav" class="chapter-nav" aria-label="Chapter navigation"></nav>
-      <div id="readerParagraphs" class="reader-paragraphs"></div>
-      <article id="readerSuggestions" class="suggestions hidden"></article>
-    </section>
-
-    <section id="profileView" class="screen profile-screen hidden">
-      <p id="profilesText"></p>
-      <div class="profile-row">
+      <div class="quiz-controls">
         <label for="quizCountInput">Quiz size</label>
         <input id="quizCountInput" type="number" min="20" max="200" step="1" value="60" />
+        <label for="themeSelect">Theme</label>
+        <select id="themeSelect">
+          <option value="light">Light</option>
+          <option value="sepia">Sepia</option>
+          <option value="dark">Dark</option>
+        </select>
+        <label for="fontSizeInput">Font</label>
+        <input id="fontSizeInput" type="number" min="16" max="22" step="1" value="18" />
+        <label for="lineHeightInput">Line height</label>
+        <input id="lineHeightInput" type="number" min="1.65" max="1.8" step="0.01" value="1.72" />
         <button id="exportProfileBtn" class="btn" type="button">Export profile</button>
         <label for="importProfileInput" class="btn">Import profile</label>
         <input id="importProfileInput" class="file-input" type="file" accept="application/json" />
@@ -60,13 +135,68 @@
       <section id="quizSection" class="quiz-section hidden">
         <p id="quizProgress"></p>
         <div id="checklistWrap"></div>
-        <button id="submitChecklistBtn" class="btn" type="button">Next Batch</button>
+        <button id="submitChecklistBtn" class="btn primary" type="button">Next Batch</button>
       </section>
+      <div class="row-actions">
+        <button id="goLibraryBtn" class="btn" type="button">Back to library</button>
+      </div>
     </section>
+
+    <section id="readerView" class="surface reader-view hidden">
+      <header class="reader-topbar" id="readerTopbar">
+        <div class="reader-topbar-left">
+          <button id="readerBackBtn" class="btn" type="button">Back</button>
+          <h2 id="readerBookTitle">No book open</h2>
+        </div>
+        <div class="reader-topbar-center">
+          <p id="readerChapterTitle"></p>
+          <p id="readerProgress">Chapter 1 · 0%</p>
+        </div>
+        <div class="reader-topbar-right">
+          <select id="assistModeSelect" aria-label="Assistance mode">
+            <option value="off">Off</option>
+            <option value="quiet" selected>Quiet</option>
+            <option value="assisted">Assisted</option>
+          </select>
+          <button id="prepareWordsBtn" class="btn" type="button">Prepare words</button>
+          <button id="toggleAssistBtn" class="hidden" type="button">Assist</button>
+          <button id="suggestRemainingBtn" class="hidden" type="button">Suggest</button>
+          <button id="suggestNextBtn" class="hidden" type="button">Suggest next</button>
+          <button id="suggestWholeReaderBtn" class="hidden" type="button">Suggest whole</button>
+        </div>
+      </header>
+
+      <nav id="chapterNav" class="chapter-nav" aria-label="Chapter navigation"></nav>
+
+      <div class="reader-layout">
+        <article id="readerParagraphs" class="reader-paragraphs reader-text"></article>
+        <aside id="readerSuggestions" class="assist-rail hidden"></aside>
+      </div>
+    </section>
+
+    <dialog id="prepareDialog" class="prepare-dialog">
+      <form method="dialog" class="prepare-card">
+        <header>
+          <h3>Prepare vocabulary</h3>
+          <p>These words are selected because they occur often and appear in sentences where they are likely to be the main unfamiliar word.</p>
+        </header>
+        <label for="prepareScopeSelect">Scope</label>
+        <select id="prepareScopeSelect">
+          <option value="next">Next section</option>
+          <option value="chapter">Current chapter</option>
+          <option value="book">Entire book</option>
+        </select>
+        <div class="row-actions">
+          <button id="prepareRunBtn" class="btn primary" type="button">Generate list</button>
+          <button id="prepareCloseBtn" class="btn" type="button">Close</button>
+        </div>
+        <article id="prepareResults" class="prepare-results"></article>
+      </form>
+    </dialog>
 
     <p id="statusText" class="status" aria-live="polite"></p>
     <button id="goReaderBtn" class="hidden" type="button">Reader</button>
-    <button id="goProfileBtn" class="hidden" type="button">Profile</button>
+    <section id="onboardingBanner" class="hidden" aria-hidden="true"></section>
   </main>
 
   <script src="https://unpkg.com/compromise@14.15.0/builds/compromise.min.js"></script>

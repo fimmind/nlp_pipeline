@@ -1,5 +1,8 @@
-const PROFILE_STORAGE_KEY = "vocab_reader_profiles_v2";
-const UI_STORAGE_KEY = "vocab_reader_ui_state_v1";
+const PROFILE_STORAGE_KEY = "assisted_reader:v1:profiles";
+const ACTIVE_PROFILE_STORAGE_KEY = "assisted_reader:v1:active_profile_id";
+const UI_STORAGE_KEY = "assisted_reader:v1:settings";
+const LEGACY_PROFILE_STORAGE_KEY = "vocab_reader_profiles_v2";
+const LEGACY_UI_STORAGE_KEY = "vocab_reader_ui_state_v1";
 const BOOK_DB_NAME = "vocab_reader_books_v1";
 const BOOK_STORE = "books";
 const WORD_RE = /[A-Za-z]+(?:['’][A-Za-z]+)?/g;
@@ -17,6 +20,13 @@ const SUGGESTION_SCORING = {
 const CARD_SCORING = {
   freqWeight: 0.7,
   unknownWeight: 0.3,
+};
+const PREPARE_SCORING = {
+  frequency: 0.35,
+  oneUnknown: 0.30,
+  predictedUnknown: 0.20,
+  proximity: 0.10,
+  uncertainty: 0.05,
 };
 
 const WORD_TOKEN_RE = /^[A-Za-z]+(?:['’][A-Za-z]+)?$/;
@@ -37,21 +47,40 @@ const CALENDAR_WORD_EXCLUSIONS = new Set([
 ]);
 
 const ui = {
+  appTopbar: document.getElementById("appTopbar"),
   goLibraryBtn: document.getElementById("goLibraryBtn"),
   goReaderBtn: document.getElementById("goReaderBtn"),
   goProfileBtn: document.getElementById("goProfileBtn"),
   statusText: document.getElementById("statusText"),
   onboardingBanner: document.getElementById("onboardingBanner"),
+  onboardingView: document.getElementById("onboardingView"),
+  onboardingToCreateBtn: document.getElementById("onboardingToCreateBtn"),
+  onboardingGuestBtn: document.getElementById("onboardingGuestBtn"),
+  onboardingCreateBtn: document.getElementById("onboardingCreateBtn"),
+  onboardingStartQuizBtn: document.getElementById("onboardingStartQuizBtn"),
+  onboardingProfileInput: document.getElementById("onboardingProfileInput"),
+  onboardingLanguageInput: document.getElementById("onboardingLanguageInput"),
+  onboardingAssistInput: document.getElementById("onboardingAssistInput"),
 
   libraryView: document.getElementById("libraryView"),
   libraryList: document.getElementById("libraryList"),
   librarySuggestions: document.getElementById("librarySuggestions"),
   bookUpload: document.getElementById("bookUpload"),
+  homeProfileName: document.getElementById("homeProfileName"),
+  homeCurrentBookTitle: document.getElementById("homeCurrentBookTitle"),
+  homeCurrentBookMeta: document.getElementById("homeCurrentBookMeta"),
+  continueReadingBtn: document.getElementById("continueReadingBtn"),
+  supportModeText: document.getElementById("supportModeText"),
+  supportLevelText: document.getElementById("supportLevelText"),
 
   readerView: document.getElementById("readerView"),
   chapterNav: document.getElementById("chapterNav"),
   readerBookTitle: document.getElementById("readerBookTitle"),
   readerChapterTitle: document.getElementById("readerChapterTitle"),
+  readerProgress: document.getElementById("readerProgress"),
+  readerBackBtn: document.getElementById("readerBackBtn"),
+  prepareWordsBtn: document.getElementById("prepareWordsBtn"),
+  assistModeSelect: document.getElementById("assistModeSelect"),
   readerParagraphs: document.getElementById("readerParagraphs"),
   suggestRemainingBtn: document.getElementById("suggestRemainingBtn"),
   suggestNextBtn: document.getElementById("suggestNextBtn"),
@@ -65,6 +94,9 @@ const ui = {
   deleteProfileBtn: document.getElementById("deleteProfileBtn"),
   profilesText: document.getElementById("profilesText"),
   quizCountInput: document.getElementById("quizCountInput"),
+  themeSelect: document.getElementById("themeSelect"),
+  fontSizeInput: document.getElementById("fontSizeInput"),
+  lineHeightInput: document.getElementById("lineHeightInput"),
   startQuizBtn: document.getElementById("startQuizBtn"),
   exportProfileBtn: document.getElementById("exportProfileBtn"),
   importProfileInput: document.getElementById("importProfileInput"),
@@ -72,6 +104,11 @@ const ui = {
   quizProgress: document.getElementById("quizProgress"),
   checklistWrap: document.getElementById("checklistWrap"),
   submitChecklistBtn: document.getElementById("submitChecklistBtn"),
+  prepareDialog: document.getElementById("prepareDialog"),
+  prepareScopeSelect: document.getElementById("prepareScopeSelect"),
+  prepareRunBtn: document.getElementById("prepareRunBtn"),
+  prepareCloseBtn: document.getElementById("prepareCloseBtn"),
+  prepareResults: document.getElementById("prepareResults"),
 };
 
 const state = {
@@ -82,11 +119,13 @@ const state = {
   books: [],
   currentBookId: "",
   currentChapterIdx: 0,
-  assistEnabled: true,
+  assistMode: "quiet",
   quizWords: [],
   quizBatchSize: 10,
   quizBatchIndex: 0,
   lexiconEntries: new Map(),
+  onboardingStep: "welcome",
+  readerLookupWord: "",
 };
 
 function normalizeWord(token) {
@@ -261,32 +300,51 @@ function contextualDeinflectTaggedTerms(taggedTerms, lowerToIdx, excludeProperNo
 
 function loadProfilesStore() {
   try {
-    const raw = localStorage.getItem(PROFILE_STORAGE_KEY);
-    if (!raw) return { current: DEFAULT_PROFILE_NAME, items: {} };
-    const parsed = JSON.parse(raw);
-    return { current: safeNickname(parsed.current || DEFAULT_PROFILE_NAME), items: parsed.items || {} };
+    const rawProfiles = localStorage.getItem(PROFILE_STORAGE_KEY);
+    const rawActive = localStorage.getItem(ACTIVE_PROFILE_STORAGE_KEY);
+    if (rawProfiles) {
+      const parsedItems = JSON.parse(rawProfiles);
+      const items = parsedItems && typeof parsedItems === "object" ? parsedItems : {};
+      const current = safeNickname(rawActive || Object.keys(items)[0] || DEFAULT_PROFILE_NAME);
+      return { current, items };
+    }
+    const legacyRaw = localStorage.getItem(LEGACY_PROFILE_STORAGE_KEY);
+    if (legacyRaw) {
+      const parsed = JSON.parse(legacyRaw);
+      const current = safeNickname(parsed.current || DEFAULT_PROFILE_NAME);
+      const items = parsed.items || {};
+      return { current, items };
+    }
+    return { current: DEFAULT_PROFILE_NAME, items: {} };
   } catch {
     return { current: DEFAULT_PROFILE_NAME, items: {} };
   }
 }
 
 function saveProfilesStore() {
-  localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(state.profiles));
+  localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(state.profiles.items));
+  localStorage.setItem(ACTIVE_PROFILE_STORAGE_KEY, state.profiles.current);
 }
 
 function loadUiPrefs() {
   try {
     const raw = localStorage.getItem(UI_STORAGE_KEY);
-    if (!raw) return;
-    const parsed = JSON.parse(raw);
-    state.assistEnabled = parsed.assistEnabled !== false;
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      state.assistMode = ["off", "quiet", "assisted"].includes(parsed.assistMode) ? parsed.assistMode : "quiet";
+      return;
+    }
+    const legacyRaw = localStorage.getItem(LEGACY_UI_STORAGE_KEY);
+    if (!legacyRaw) return;
+    const legacyParsed = JSON.parse(legacyRaw);
+    state.assistMode = legacyParsed.assistEnabled === false ? "off" : "quiet";
   } catch {
     // ignore
   }
 }
 
 function saveUiPrefs() {
-  localStorage.setItem(UI_STORAGE_KEY, JSON.stringify({ assistEnabled: state.assistEnabled }));
+  localStorage.setItem(UI_STORAGE_KEY, JSON.stringify({ assistMode: state.assistMode }));
 }
 
 function ensureProfile(name) {
@@ -298,15 +356,27 @@ function ensureProfile(name) {
       settings: {
         knownThreshold: DEFAULT_THRESHOLD,
         quizSize: DEFAULT_QUIZ_SIZE,
+        assistanceMode: "quiet",
+        definitionLanguage: "en",
+        showTranslations: false,
+        showDefinitions: true,
+        fontSize: 18,
+        lineHeight: 1.72,
+        theme: "light",
       },
       quizMeta: {
         strategy: QUIZ_STRATEGY,
         lastTakenAt: null,
       },
+      bookState: {},
     };
   }
   state.profiles.current = name;
   state.activeProfile = state.profiles.items[name];
+  if (!state.activeProfile.settings) state.activeProfile.settings = {};
+  if (!state.activeProfile.settings.assistanceMode) state.activeProfile.settings.assistanceMode = "quiet";
+  state.assistMode = state.activeProfile.settings.assistanceMode;
+  applyReaderSettings(state.activeProfile.settings);
   saveProfilesStore();
 }
 
@@ -690,15 +760,20 @@ function analyzeScopeText(text, unknownSet) {
   const properLexicon = buildHighConfidenceProperNounLexicon(taggedSentences);
   const freq = new Map();
   const sentenceStats = new Map();
+  const firstPosition = new Map();
 
-  for (const row of taggedSentenceRows) {
+  for (let sentenceIdx = 0; sentenceIdx < taggedSentenceRows.length; sentenceIdx += 1) {
+    const row = taggedSentenceRows[sentenceIdx];
     const terms = contextualDeinflectTaggedTerms(row.taggedTerms, state.model.wordToIdx, true, properLexicon).tokens;
     const sentenceWords = [];
     for (const term of terms) {
       if (!term) continue;
       if (!state.model.wordToIdx.has(term)) continue;
       sentenceWords.push(term);
-      if (unknownSet.has(term)) freq.set(term, (freq.get(term) || 0) + 1);
+      if (unknownSet.has(term)) {
+        freq.set(term, (freq.get(term) || 0) + 1);
+        if (!firstPosition.has(term)) firstPosition.set(term, sentenceIdx);
+      }
     }
     const unknownInSentence = [...new Set(sentenceWords.filter((w) => unknownSet.has(w)))];
     for (const word of unknownInSentence) {
@@ -715,6 +790,8 @@ function analyzeScopeText(text, unknownSet) {
     const contexts = sentenceStats.get(word) || [];
     contexts.sort((a, b) => (a.unknownCount - b.unknownCount) || (b.knownCount - a.knownCount));
     const best = contexts.slice(0, 3);
+    const sentenceScore = computeSentenceHelpfulnessScore(contexts);
+    const freqScore = computeFrequencyScore(count, maxFreq);
     const score = computeSuggestionScore({
       count,
       maxFreq,
@@ -722,7 +799,17 @@ function analyzeScopeText(text, unknownSet) {
       freqWeight: SUGGESTION_SCORING.freqWeight,
       sentenceWeight: SUGGESTION_SCORING.sentenceWeight,
     });
-    rows.push({ word, count, score, examples: best.map((x) => x.sentence) });
+    rows.push({
+      word,
+      count,
+      score,
+      examples: best.map((x) => x.sentence),
+      components: {
+        sentenceScore,
+        freqScore,
+        firstSentenceIndex: firstPosition.has(word) ? Number(firstPosition.get(word)) : Number.MAX_SAFE_INTEGER,
+      },
+    });
   }
 
   rows.sort((a, b) => b.score - a.score || b.count - a.count || a.word.localeCompare(b.word));
@@ -783,41 +870,76 @@ function escapeHtml(s) {
     .replaceAll(">", "&gt;");
 }
 
+function applyReaderSettings(settings) {
+  if (!settings) return;
+  const theme = ["light", "sepia", "dark"].includes(settings.theme) ? settings.theme : "light";
+  document.body.setAttribute("data-theme", theme);
+  const fontSize = Math.max(16, Math.min(22, Number(settings.fontSize) || 18));
+  const lineHeight = Math.max(1.65, Math.min(1.8, Number(settings.lineHeight) || 1.72));
+  document.documentElement.style.setProperty("--reader-font-size", `${fontSize}px`);
+  document.documentElement.style.setProperty("--reader-line-height", String(lineHeight));
+}
+
 function renderView(name) {
+  ui.onboardingView.classList.toggle("hidden", name !== "onboarding");
   ui.libraryView.classList.toggle("hidden", name !== "library");
   ui.readerView.classList.toggle("hidden", name !== "reader");
   ui.profileView.classList.toggle("hidden", name !== "profile");
+  ui.appTopbar.classList.toggle("hidden", name === "reader");
 }
 
-function renderOnboardingBanner() {
-  const observedCount = Object.keys(state.activeProfile.observed).length;
-  const profileCount = Object.keys(state.profiles.items).length;
-  if (observedCount > 0 && profileCount > 1) {
-    ui.onboardingBanner.classList.add("hidden");
+function renderOnboarding() {
+  const hasProfiles = Object.keys(state.profiles.items).length > 0;
+  ui.onboardingBanner.classList.add("hidden");
+  if (hasProfiles) {
+    ui.onboardingView.classList.add("hidden");
     return;
   }
-  ui.onboardingBanner.innerHTML = `<p class=\"notice-head\"><strong>Start with the quiz</strong></p><p class=\"notice-copy\">First-time setup: enter a profile name, click Use profile, then take the initial quiz for accurate reading assistance.</p><div class=\"notice-actions\"><button id=\"bannerUseProfileBtn\" class=\"btn\" type=\"button\">Use current name</button><button id=\"bannerTakeQuizBtn\" class=\"btn\" type=\"button\">Take quiz</button></div>`;
-  ui.onboardingBanner.classList.remove("hidden");
-  document.getElementById("bannerUseProfileBtn").addEventListener("click", () => {
-    const name = safeNickname(ui.profileNameInput.value || state.profiles.current);
-    ensureProfile(name);
-    renderProfiles();
-    ui.statusText.textContent = `Using profile: ${name}.`;
-  });
-  document.getElementById("bannerTakeQuizBtn").addEventListener("click", () => {
-    renderView("profile");
-    startQuizFlow();
+  ui.onboardingView.classList.remove("hidden");
+  const step = state.onboardingStep;
+  ui.onboardingView.querySelectorAll("[data-step]").forEach((node) => {
+    node.classList.toggle("hidden", node.getAttribute("data-step") !== step);
   });
 }
 
 function renderProfiles() {
   const names = Object.keys(state.profiles.items).sort((a, b) => a.localeCompare(b));
   ui.profilesText.textContent = names.length === 0 ? "No profiles." : `Profiles: ${names.map((n) => n === state.profiles.current ? `${n} (current)` : n).join(", ")}`;
-  ui.profileNameInput.value = state.profiles.current;
-  ui.quizCountInput.value = String(state.activeProfile.settings.quizSize || DEFAULT_QUIZ_SIZE);
+  const activeName = state.activeProfile ? state.activeProfile.name : "";
+  ui.profileNameInput.value = activeName;
+  if (ui.onboardingProfileInput) ui.onboardingProfileInput.value = activeName;
+  if (state.activeProfile) {
+    ui.quizCountInput.value = String(state.activeProfile.settings.quizSize || DEFAULT_QUIZ_SIZE);
+    ui.themeSelect.value = state.activeProfile.settings.theme || "light";
+    ui.fontSizeInput.value = String(state.activeProfile.settings.fontSize || 18);
+    ui.lineHeightInput.value = String(state.activeProfile.settings.lineHeight || 1.72);
+    ui.supportModeText.textContent = `Vocabulary assistance: ${state.assistMode[0].toUpperCase()}${state.assistMode.slice(1)}`;
+    const observed = Object.keys(state.activeProfile.observed).length;
+    const knownCount = Object.values(state.activeProfile.observed).filter((x) => Number(x) === 1).length;
+    const ratio = observed === 0 ? 0 : knownCount / observed;
+    const level = ratio >= 0.72 ? "Advanced" : ratio >= 0.48 ? "Intermediate" : observed === 0 ? "Not calibrated" : "Supported";
+    ui.supportLevelText.textContent = `Estimated support level: ${level}`;
+    ui.homeProfileName.textContent = activeName || "No active profile";
+    applyReaderSettings(state.activeProfile.settings);
+  } else {
+    ui.supportModeText.textContent = "Vocabulary assistance: Quiet";
+    ui.supportLevelText.textContent = "Estimated support level: Not calibrated";
+    ui.homeProfileName.textContent = "No active profile";
+  }
 }
 
 function renderLibrary() {
+  const activeBook = state.books.find((book) => book.id === state.currentBookId) || state.books[0] || null;
+  if (activeBook) {
+    const chapterCount = activeBook.chapters.length;
+    const chapterIdx = Math.min(state.currentChapterIdx, Math.max(0, chapterCount - 1));
+    const chapter = activeBook.chapters[chapterIdx];
+    ui.homeCurrentBookTitle.textContent = activeBook.title;
+    ui.homeCurrentBookMeta.textContent = `${chapter.title} · ${(Math.round(((chapterIdx + 1) / Math.max(1, chapterCount)) * 100))}%`;
+  } else {
+    ui.homeCurrentBookTitle.textContent = "No book selected";
+    ui.homeCurrentBookMeta.textContent = "Import a book to begin.";
+  }
   if (state.books.length === 0) {
     ui.libraryList.innerHTML = `<p class="meta">No books in library yet. Import .txt or .epub.</p>`;
     return;
@@ -840,30 +962,66 @@ function renderLibrary() {
 }
 
 function renderReader() {
+  if (!state.activeProfile) {
+    ui.readerBookTitle.textContent = "No profile";
+    ui.readerChapterTitle.textContent = "";
+    ui.readerProgress.textContent = "Chapter 0 · 0%";
+    ui.chapterNav.innerHTML = "";
+    ui.readerParagraphs.innerHTML = `<p class=\"meta\">Create a profile before reading.</p>`;
+    ui.readerSuggestions.innerHTML = "";
+    ui.readerSuggestions.classList.add("hidden");
+    return;
+  }
   const book = state.books.find((b) => b.id === state.currentBookId);
   if (!book) {
     ui.readerBookTitle.textContent = "No book open";
     ui.readerChapterTitle.textContent = "";
+    ui.readerProgress.textContent = "Chapter 0 · 0%";
     ui.chapterNav.innerHTML = "";
     ui.readerParagraphs.innerHTML = "";
+    ui.readerSuggestions.innerHTML = "";
+    ui.readerSuggestions.classList.add("hidden");
     return;
   }
 
   const chapter = book.chapters[state.currentChapterIdx] || book.chapters[0];
   ui.readerBookTitle.textContent = book.title;
   ui.readerChapterTitle.textContent = chapter.title;
-  ui.toggleAssistBtn.textContent = `Assist: ${state.assistEnabled ? "on" : "off"}`;
+  ui.readerProgress.textContent = `Chapter ${state.currentChapterIdx + 1} · ${Math.round(((state.currentChapterIdx + 1) / Math.max(1, book.chapters.length)) * 100)}%`;
+  ui.assistModeSelect.value = state.assistMode;
 
   ui.chapterNav.innerHTML = book.chapters.map((c, idx) => `<button class="chapter-btn ${idx === state.currentChapterIdx ? "active" : ""}" data-chapter-idx="${idx}" type="button">${escapeHtml(c.title)}</button>`).join("");
   ui.chapterNav.querySelectorAll("[data-chapter-idx]").forEach((btn) => {
     btn.addEventListener("click", () => {
       state.currentChapterIdx = Number(btn.getAttribute("data-chapter-idx"));
+      if (!state.activeProfile.bookState) state.activeProfile.bookState = {};
+      state.activeProfile.bookState[book.id] = {
+        chapterIdx: state.currentChapterIdx,
+        progressRatio: (state.currentChapterIdx + 1) / Math.max(1, book.chapters.length),
+      };
+      saveProfilesStore();
       renderReader();
     });
   });
 
   const { unknown, theta, threshold } = computeUnknownSet(book);
   const properLexicon = buildHighConfidenceProperNounLexicon(chapter.paragraphs.map((p) => tagSentenceTerms(p)));
+  const railCards = [];
+  const renderWordCard = (word, sourceParagraph, sentenceExample) => {
+    const entry = getLexiconEntry(word);
+    return `<article class="word-card"><h4>${entry.word}</h4><div class="ipa">${entry.ipa || "[N/A]"}</div><p>${escapeHtml(entry.definition)}</p>${sentenceExample ? `<p>Example: ${escapeHtml(sentenceExample)}</p>` : ""}<div class="actions"><button class="btn" data-mark-word="${word}" data-mark-label="1" data-source="${sourceParagraph}" type="button">Known</button><button class="btn" data-mark-word="${word}" data-mark-label="0" data-source="${sourceParagraph}" type="button">Still unknown</button></div></article>`;
+  };
+  const escapeRegex = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const renderParagraphText = (paragraph, highlightWords) => {
+    let html = escapeHtml(paragraph);
+    if (state.assistMode === "off") return html;
+    for (const row of highlightWords) {
+      const safe = escapeRegex(row.raw);
+      const pattern = new RegExp(`\\b${safe}\\b`, "g");
+      html = html.replace(pattern, `<mark class="word-mark ${row.priority ? "priority" : ""}" data-lookup-word="${row.word}">${row.raw}</mark>`);
+    }
+    return html;
+  };
 
   ui.readerParagraphs.innerHTML = chapter.paragraphs.map((paragraph, idx) => {
     const tagged = tagSentenceTerms(paragraph);
@@ -877,16 +1035,53 @@ function renderReader() {
       const { p } = effectiveWordBelief(theta, word, idxWord);
       const uncertaintyScore = (1 - p) / Math.max(1e-6, 1 - threshold);
       const importance = computeInlineCardImportance({ freq, uncertaintyScore });
-      return { word, importance };
+      return { word, importance, unknownProbability: 1 - p };
     }).sort((a, b) => b.importance - a.importance).slice(0, maxCards);
 
-    const cards = state.assistEnabled ? ranked.map(({ word }) => {
-      const entry = getLexiconEntry(word);
-      return `<article class="word-card"><h4>${entry.word}</h4><div class="ipa">${entry.ipa || "[N/A]"}</div><p>${escapeHtml(entry.definition)}</p><div class="actions"><button class="btn" data-mark-word="${word}" data-mark-label="1" data-source="para_${idx}" type="button">Known</button><button class="btn" data-mark-word="${word}" data-mark-label="0" data-source="para_${idx}" type="button">Unknown</button></div></article>`;
-    }).join("") : "";
+    const highlightWords = [];
+    for (let tokenIdx = 0; tokenIdx < tagged.length; tokenIdx += 1) {
+      const lemma = deinflected[tokenIdx];
+      if (!lemma) continue;
+      const match = ranked.find((row) => row.word === lemma);
+      if (!match) continue;
+      highlightWords.push({
+        raw: tagged[tokenIdx].raw,
+        word: lemma,
+        priority: match.unknownProbability > 0.60,
+      });
+    }
+    const paragraphText = renderParagraphText(paragraph, highlightWords);
+    let cards = "";
+    if (state.assistMode === "assisted") {
+      cards = ranked.map(({ word }) => renderWordCard(word, `para_${idx}`, paragraph)).join("");
+      cards && railCards.push(cards);
+    } else if (state.assistMode === "quiet" && state.readerLookupWord) {
+      const selected = ranked.find((row) => row.word === state.readerLookupWord);
+      if (selected) cards = renderWordCard(selected.word, `para_${idx}`, paragraph);
+    }
 
-    return `<div class="paragraph-row"><div class="paragraph-text">${escapeHtml(paragraph)}</div><div class="assist-col">${cards}</div></div>`;
+    return `<div class="paragraph-row"><div class="paragraph-text">${paragraphText}</div><div class="assist-col">${cards}</div></div>`;
   }).join("");
+
+  if (state.assistMode === "assisted" && railCards.length > 0) {
+    ui.readerSuggestions.innerHTML = `<h3>Assistance</h3>${railCards.join("")}`;
+    ui.readerSuggestions.classList.remove("hidden");
+  } else if (state.assistMode === "quiet" && state.readerLookupWord) {
+    const entry = getLexiconEntry(state.readerLookupWord);
+    ui.readerSuggestions.innerHTML = `<h3>Lookup</h3>${renderWordCard(entry.word, "lookup", "")}`;
+    ui.readerSuggestions.classList.remove("hidden");
+  } else {
+    ui.readerSuggestions.innerHTML = "";
+    ui.readerSuggestions.classList.add("hidden");
+  }
+
+  ui.readerParagraphs.querySelectorAll("[data-lookup-word]").forEach((node) => {
+    node.addEventListener("click", () => {
+      if (state.assistMode !== "quiet") return;
+      state.readerLookupWord = normalizeWord(node.getAttribute("data-lookup-word"));
+      renderReader();
+    });
+  });
 
   ui.readerParagraphs.querySelectorAll("[data-mark-word]").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -894,7 +1089,16 @@ function renderReader() {
       const label = Number(btn.getAttribute("data-mark-label"));
       state.activeProfile.observed[word] = label;
       saveProfilesStore();
-      renderOnboardingBanner();
+      renderReader();
+      ui.statusText.textContent = `Updated '${word}' as ${label === 1 ? "known" : "unknown"}.`;
+    });
+  });
+  ui.readerSuggestions.querySelectorAll("[data-mark-word]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const word = btn.getAttribute("data-mark-word");
+      const label = Number(btn.getAttribute("data-mark-label"));
+      state.activeProfile.observed[word] = label;
+      saveProfilesStore();
       renderReader();
       ui.statusText.textContent = `Updated '${word}' as ${label === 1 ? "known" : "unknown"}.`;
     });
@@ -903,8 +1107,20 @@ function renderReader() {
 
 function openBook(bookId) {
   state.currentBookId = bookId;
-  state.currentChapterIdx = 0;
+  if (!state.activeProfile) {
+    renderView("onboarding");
+    return;
+  }
+  const saved = state.activeProfile.bookState && state.activeProfile.bookState[bookId];
+  state.currentChapterIdx = saved && Number.isInteger(saved.chapterIdx) ? saved.chapterIdx : 0;
+  if (!state.activeProfile.bookState) state.activeProfile.bookState = {};
+  state.activeProfile.bookState[bookId] = {
+    chapterIdx: state.currentChapterIdx,
+    progressRatio: 0,
+  };
+  saveProfilesStore();
   renderView("reader");
+  renderLibrary();
   renderReader();
 }
 
@@ -971,6 +1187,98 @@ function suggestWholeCurrentBook() {
   renderSuggestions(ui.readerSuggestions, `Whole-book suggestions: ${book.title}`, rows);
 }
 
+function buildPrepareRecommendations(book, text) {
+  const { unknown, theta, threshold } = computeUnknownSet(book);
+  const rows = analyzeScopeText(text, unknown);
+  const maxFirstSentence = Math.max(1, ...rows.map((row) => row.components ? row.components.firstSentenceIndex : 1));
+  return rows.map((row) => {
+    const idx = state.model.wordToIdx.get(row.word);
+    const { p } = effectiveWordBelief(theta, row.word, idx);
+    const predictedUnknown = Math.max(0, Math.min(1, (threshold - p) / Math.max(1e-6, threshold)));
+    const uncertainty = 1 - (Math.abs(p - 0.5) * 2);
+    const firstSentenceIndex = row.components ? row.components.firstSentenceIndex : maxFirstSentence;
+    const proximity = 1 - Math.min(1, firstSentenceIndex / maxFirstSentence);
+    const sentenceScore = row.components ? row.components.sentenceScore : 0;
+    const freqScore = row.components ? row.components.freqScore : 0;
+    const recommendationScore = (
+      PREPARE_SCORING.frequency * freqScore
+      + PREPARE_SCORING.oneUnknown * sentenceScore
+      + PREPARE_SCORING.predictedUnknown * predictedUnknown
+      + PREPARE_SCORING.proximity * proximity
+      + PREPARE_SCORING.uncertainty * uncertainty
+    );
+    return {
+      ...row,
+      recommendationScore,
+      predictedUnknown,
+      uncertainty,
+      proximity,
+    };
+  }).sort((a, b) => b.recommendationScore - a.recommendationScore || b.count - a.count || a.word.localeCompare(b.word));
+}
+
+function openPrepareDialog() {
+  if (!state.currentBookId) {
+    ui.statusText.textContent = "Open a book first.";
+    return;
+  }
+  ui.prepareResults.innerHTML = "";
+  if (typeof ui.prepareDialog.showModal === "function") {
+    ui.prepareDialog.showModal();
+  } else {
+    ui.prepareDialog.setAttribute("open", "open");
+  }
+}
+
+function closePrepareDialog() {
+  if (typeof ui.prepareDialog.close === "function") {
+    ui.prepareDialog.close();
+  } else {
+    ui.prepareDialog.removeAttribute("open");
+  }
+}
+
+function runPrepareWords() {
+  const book = state.books.find((b) => b.id === state.currentBookId);
+  if (!book) {
+    ui.statusText.textContent = "Open a book first.";
+    return;
+  }
+  const scope = ui.prepareScopeSelect.value;
+  let title = "";
+  let text = "";
+  if (scope === "next") {
+    text = getNextChapterText(book);
+    title = "Recommended for next section";
+  } else if (scope === "chapter") {
+    text = getCurrentChapterRemainingText(book);
+    title = "Recommended for current chapter";
+  } else {
+    text = book.chapters.map((c) => c.paragraphs.join("\n\n")).join("\n\n");
+    title = "Recommended for entire book";
+  }
+  if (!text) {
+    ui.prepareResults.innerHTML = `<p class=\"meta\">No text in this scope.</p>`;
+    return;
+  }
+  const rows = buildPrepareRecommendations(book, text);
+  if (rows.length === 0) {
+    ui.prepareResults.innerHTML = `<p class=\"meta\">No recommendations in this scope.</p>`;
+    return;
+  }
+  ui.prepareResults.innerHTML = `<h3>${title}</h3>${rows.slice(0, 30).map((r) => `<div class=\"suggestion-item\"><strong>${escapeHtml(r.word)}</strong><p class=\"meta\">Frequency in scope: ${r.count} · Estimated unknown: ${(r.predictedUnknown * 100).toFixed(0)}% · Score: ${r.recommendationScore.toFixed(3)}</p>${r.examples.length > 0 ? `<p>Best sentence: ${escapeHtml(r.examples[0])}</p>` : ""}<div class=\"row-actions\"><button class=\"btn\" data-mark-word=\"${r.word}\" data-mark-label=\"1\" type=\"button\">Mark known</button><button class=\"btn\" data-mark-word=\"${r.word}\" data-mark-label=\"0\" type=\"button\">Learn</button></div></div>`).join("")}`;
+  ui.prepareResults.querySelectorAll("[data-mark-word]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const word = btn.getAttribute("data-mark-word");
+      const label = Number(btn.getAttribute("data-mark-label"));
+      state.activeProfile.observed[word] = label;
+      saveProfilesStore();
+      ui.statusText.textContent = `Updated '${word}' as ${label === 1 ? "known" : "unknown"}.`;
+      renderReader();
+    });
+  });
+}
+
 async function deleteBook(bookId) {
   await dbDeleteBook(bookId);
   state.books = state.books.filter((b) => b.id !== bookId);
@@ -980,6 +1288,10 @@ async function deleteBook(bookId) {
 }
 
 function startQuizFlow() {
+  if (!state.activeProfile) {
+    ui.statusText.textContent = "Create a profile first.";
+    return;
+  }
   if (!state.activeProfile.quizMeta || typeof state.activeProfile.quizMeta !== "object") {
     state.activeProfile.quizMeta = { strategy: QUIZ_STRATEGY, lastTakenAt: null, seed: 0 };
   }
@@ -1017,8 +1329,14 @@ function submitQuizBatch() {
   if ((state.quizBatchIndex * state.quizBatchSize) >= state.quizWords.length) {
     ui.quizSection.classList.add("hidden");
     ui.statusText.textContent = `Quiz complete. Observed words: ${Object.keys(state.activeProfile.observed).length}.`;
-    renderOnboardingBanner();
+    state.onboardingStep = "quiz";
+    if (state.currentBookId) {
+      renderView("reader");
+    } else {
+      renderView("library");
+    }
     renderReader();
+    renderLibrary();
     return;
   }
   renderQuizBatch();
@@ -1051,8 +1369,9 @@ async function importProfileFromFile(file) {
   state.activeProfile = state.profiles.items[name];
   saveProfilesStore();
   renderProfiles();
-  renderOnboardingBanner();
+  renderOnboarding();
   renderReader();
+  renderLibrary();
 }
 
 async function loadModel() {
@@ -1151,13 +1470,20 @@ function bindEvents() {
   ui.goLibraryBtn.addEventListener("click", () => renderView("library"));
   ui.goReaderBtn.addEventListener("click", () => renderView("reader"));
   ui.goProfileBtn.addEventListener("click", () => renderView("profile"));
+  ui.readerBackBtn.addEventListener("click", () => renderView("library"));
+  ui.continueReadingBtn.addEventListener("click", () => {
+    if (!state.currentBookId && state.books.length > 0) state.currentBookId = state.books[0].id;
+    renderView("reader");
+    renderReader();
+  });
 
   ui.createProfileBtn.addEventListener("click", () => {
     const name = safeNickname(ui.profileNameInput.value);
     ensureProfile(name);
     renderProfiles();
-    renderOnboardingBanner();
+    renderOnboarding();
     renderReader();
+    renderLibrary();
   });
 
   ui.deleteProfileBtn.addEventListener("click", () => {
@@ -1165,13 +1491,24 @@ function bindEvents() {
     if (!state.profiles.items[name]) return;
     delete state.profiles.items[name];
     const names = Object.keys(state.profiles.items).sort((a, b) => a.localeCompare(b));
-    ensureProfile(names[0] || DEFAULT_PROFILE_NAME);
+    if (names.length > 0) {
+      ensureProfile(names[0]);
+    } else {
+      state.profiles.current = DEFAULT_PROFILE_NAME;
+      state.activeProfile = null;
+      saveProfilesStore();
+    }
     renderProfiles();
-    renderOnboardingBanner();
+    renderOnboarding();
     renderReader();
+    renderLibrary();
   });
 
   ui.startQuizBtn.addEventListener("click", () => {
+    if (!state.activeProfile) {
+      ui.statusText.textContent = "Create a profile first.";
+      return;
+    }
     renderView("profile");
     startQuizFlow();
   });
@@ -1188,15 +1525,74 @@ function bindEvents() {
     }
   });
 
-  ui.toggleAssistBtn.addEventListener("click", () => {
-    state.assistEnabled = !state.assistEnabled;
+  ui.assistModeSelect.addEventListener("change", () => {
+    state.assistMode = ui.assistModeSelect.value;
+    if (state.activeProfile && state.activeProfile.settings) {
+      state.activeProfile.settings.assistanceMode = state.assistMode;
+      saveProfilesStore();
+    }
     saveUiPrefs();
+    renderProfiles();
     renderReader();
   });
+
+  ui.themeSelect.addEventListener("change", () => {
+    if (!state.activeProfile) return;
+    state.activeProfile.settings.theme = ui.themeSelect.value;
+    saveProfilesStore();
+    applyReaderSettings(state.activeProfile.settings);
+  });
+  ui.fontSizeInput.addEventListener("change", () => {
+    if (!state.activeProfile) return;
+    state.activeProfile.settings.fontSize = Number(ui.fontSizeInput.value) || 18;
+    saveProfilesStore();
+    applyReaderSettings(state.activeProfile.settings);
+    renderReader();
+  });
+  ui.lineHeightInput.addEventListener("change", () => {
+    if (!state.activeProfile) return;
+    state.activeProfile.settings.lineHeight = Number(ui.lineHeightInput.value) || 1.72;
+    saveProfilesStore();
+    applyReaderSettings(state.activeProfile.settings);
+    renderReader();
+  });
+
+  ui.prepareWordsBtn.addEventListener("click", openPrepareDialog);
+  ui.prepareRunBtn.addEventListener("click", runPrepareWords);
+  ui.prepareCloseBtn.addEventListener("click", closePrepareDialog);
 
   ui.suggestRemainingBtn.addEventListener("click", suggestRemaining);
   ui.suggestNextBtn.addEventListener("click", suggestNextChapter);
   ui.suggestWholeReaderBtn.addEventListener("click", suggestWholeCurrentBook);
+
+  ui.onboardingToCreateBtn.addEventListener("click", () => {
+    state.onboardingStep = "create";
+    renderOnboarding();
+  });
+  ui.onboardingGuestBtn.addEventListener("click", () => {
+    ensureProfile("guest");
+    state.onboardingStep = "quiz";
+    renderOnboarding();
+    renderProfiles();
+  });
+  ui.onboardingCreateBtn.addEventListener("click", () => {
+    const name = safeNickname(ui.onboardingProfileInput.value || ui.profileNameInput.value);
+    ensureProfile(name);
+    const selectedMode = ui.onboardingAssistInput.value;
+    const language = String(ui.onboardingLanguageInput.value || "en").trim().toLowerCase();
+    state.activeProfile.settings.assistanceMode = ["off", "quiet", "assisted"].includes(selectedMode) ? selectedMode : "quiet";
+    state.activeProfile.settings.definitionLanguage = language || "en";
+    state.assistMode = state.activeProfile.settings.assistanceMode;
+    saveProfilesStore();
+    saveUiPrefs();
+    state.onboardingStep = "quiz";
+    renderProfiles();
+    renderOnboarding();
+  });
+  ui.onboardingStartQuizBtn.addEventListener("click", () => {
+    renderView("profile");
+    startQuizFlow();
+  });
 
   ui.bookUpload.addEventListener("change", async (ev) => {
     const file = ev.target.files && ev.target.files[0];
@@ -1213,6 +1609,7 @@ function bindEvents() {
       }
       await dbPutBook(book);
       state.books = await dbListBooks();
+      if (!state.currentBookId) state.currentBookId = book.id;
       renderLibrary();
       ui.statusText.textContent = `Imported ${book.title}.`;
     } catch (err) {
@@ -1224,18 +1621,29 @@ function bindEvents() {
 async function main() {
   loadUiPrefs();
   state.profiles = loadProfilesStore();
-  ensureProfile(state.profiles.current || DEFAULT_PROFILE_NAME);
   await Promise.all([loadModel(), loadLemmaDict(), loadLexicon()]);
   await seedLibraryIfEmpty();
+  if (Object.keys(state.profiles.items).length > 0) {
+    ensureProfile(state.profiles.current || Object.keys(state.profiles.items)[0]);
+  }
   bindEvents();
   renderProfiles();
-  renderOnboardingBanner();
+  renderOnboarding();
+  if (!state.currentBookId && state.books.length > 0) state.currentBookId = state.books[0].id;
   renderLibrary();
   renderReader();
-  const isFirstRun = Object.keys(state.profiles.items).length <= 1
-    && Object.keys(state.activeProfile.observed).length === 0;
-  renderView(isFirstRun ? "profile" : "library");
-  ui.statusText.textContent = `Ready. Model: ${MODEL_KEY}. Profile: ${state.activeProfile.name}.`;
+  const hasProfiles = Object.keys(state.profiles.items).length > 0;
+  if (!hasProfiles) {
+    state.onboardingStep = "welcome";
+    renderView("onboarding");
+    renderOnboarding();
+    ui.statusText.textContent = "Welcome. Create a profile to start reading.";
+  } else {
+    const observedCount = Object.keys(state.activeProfile.observed || {}).length;
+    const needsQuiz = observedCount === 0;
+    renderView(needsQuiz ? "profile" : "library");
+    ui.statusText.textContent = `Ready. Model: ${MODEL_KEY}. Profile: ${state.activeProfile.name}.`;
+  }
 }
 
 main().catch((err) => {
