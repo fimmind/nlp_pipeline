@@ -5,6 +5,7 @@ import argparse
 from functools import lru_cache
 import hashlib
 import json
+import math
 import os
 import pickle
 import re
@@ -876,6 +877,122 @@ def _stable_seed_from_text(text: str, base_seed: int) -> int:
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
     value = int(digest[:16], 16)
     return int(base_seed ^ (value & 0x7FFFFFFF))
+
+
+def _lcg_next_uniform(state: int) -> tuple[int, float]:
+    next_state = (int(state) * 1664525 + 1013904223) & 0xFFFFFFFF
+    return next_state, float(next_state) / 4294967296.0
+
+
+def _estimate_theta_rasch_from_b(
+    observed_word_ids: np.ndarray,
+    observed_labels: np.ndarray,
+    b_values: np.ndarray,
+    prior_var: float,
+    n_steps: int,
+) -> float:
+    theta = 0.0
+    if len(observed_word_ids) == 0:
+        return theta
+    for _ in range(int(n_steps)):
+        logits = theta - b_values[observed_word_ids]
+        probs = 1.0 / (1.0 + np.exp(-logits))
+        grad = float(np.sum(observed_labels - probs) - theta / prior_var)
+        hess = float(-np.sum(probs * (1.0 - probs)) - 1.0 / prior_var)
+        if abs(hess) < 1e-8:
+            break
+        theta = float(theta - grad / hess)
+    return theta
+
+
+def adaptive_uncertainty_light_random_site_words(
+    words: list[str],
+    accuracy: np.ndarray,
+    candidate_pool_words: list[str],
+    observed_answers: dict[str, int],
+    quiz_size: int,
+    seed: int,
+) -> list[str]:
+    if len(words) != len(accuracy):
+        raise ValueError(f"words/accuracy length mismatch: {len(words)} vs {len(accuracy)}")
+    if quiz_size <= 0:
+        return []
+    word_to_idx = {str(word): int(idx) for idx, word in enumerate(words)}
+    clipped_acc = np.clip(np.asarray(accuracy, dtype=np.float64), 1e-6, 1.0 - 1e-6)
+    b_values = -np.log(clipped_acc / (1.0 - clipped_acc))
+    candidate_items: list[tuple[str, int, int]] = []
+    for position, word in enumerate(candidate_pool_words):
+        idx = word_to_idx.get(str(word))
+        if idx is None:
+            continue
+        candidate_items.append((str(word), int(idx), int(position)))
+    if len(candidate_items) == 0:
+        return []
+    q = max(20, min(200, int(quiz_size)))
+    if len(candidate_items) <= q:
+        return [row[0] for row in candidate_items]
+
+    observed_ids: list[int] = []
+    observed_labels: list[int] = []
+    answered_words: set[str] = set()
+    for word, label in observed_answers.items():
+        idx = word_to_idx.get(str(word))
+        if idx is None:
+            continue
+        normalized_word = str(word)
+        answered_words.add(normalized_word)
+        observed_ids.append(int(idx))
+        observed_labels.append(1 if int(label) == 1 else 0)
+    observed_ids_arr = np.asarray(observed_ids, dtype=np.int32)
+    observed_labels_arr = np.asarray(observed_labels, dtype=np.float64)
+
+    pool = [row for row in candidate_items if row[0] not in answered_words]
+    if len(pool) < q:
+        pool = candidate_items
+
+    theta = _estimate_theta_rasch_from_b(
+        observed_word_ids=observed_ids_arr,
+        observed_labels=observed_labels_arr,
+        b_values=b_values,
+        prior_var=25.0,
+        n_steps=20,
+    )
+    scored: list[tuple[str, float, int]] = []
+    for word, idx, position in pool:
+        p = float(1.0 / (1.0 + math.exp(-(theta - float(b_values[idx])))))
+        uncertainty = p * (1.0 - p)
+        scored.append((word, uncertainty, position))
+
+    top_k = 3
+    temperature = 0.03
+    available = list(range(len(scored)))
+    out: list[str] = []
+    rng_state = int(seed) & 0xFFFFFFFF
+    n_iters = min(q, len(available))
+    for _ in range(n_iters):
+        ranked = sorted(
+            available,
+            key=lambda scored_idx: (-float(scored[scored_idx][1]), int(scored[scored_idx][2])),
+        )
+        candidates = ranked[: min(top_k, len(ranked))]
+        candidate_uncertainty = [float(scored[scored_idx][1]) for scored_idx in candidates]
+        max_score = max(candidate_uncertainty)
+        logits = [float((value / temperature) - (max_score / temperature)) for value in candidate_uncertainty]
+        exp_logits = [math.exp(max(-60.0, min(60.0, logit_value))) for logit_value in logits]
+        exp_sum = float(sum(exp_logits))
+        probs = [value / exp_sum for value in exp_logits]
+        rng_state, sample = _lcg_next_uniform(rng_state)
+        chosen_idx = 0
+        residual = sample
+        for j, prob in enumerate(probs):
+            residual -= prob
+            if residual <= 0.0:
+                chosen_idx = int(j)
+                break
+        chosen_scored_idx = int(candidates[chosen_idx])
+        out.append(str(scored[chosen_scored_idx][0]))
+        available = [value for value in available if int(value) != chosen_scored_idx]
+    return out
 
 
 def build_query_words(response_frame: pd.DataFrame, sequence_len: int, seed: int) -> np.ndarray:
