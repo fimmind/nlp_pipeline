@@ -10,6 +10,14 @@ const QUIZ_STRATEGY = "adaptive_uncertainty_light_random";
 const DEFAULT_QUIZ_SIZE = 60;
 const DEFAULT_THRESHOLD = 0.5;
 const DEFAULT_PROFILE_NAME = "default";
+const SUGGESTION_SCORING = {
+  freqWeight: 0.65,
+  sentenceWeight: 0.35,
+};
+const CARD_SCORING = {
+  freqWeight: 0.7,
+  unknownWeight: 0.3,
+};
 
 const WORD_TOKEN_RE = /^[A-Za-z]+(?:['’][A-Za-z]+)?$/;
 const NAME_LIKE_TOKEN_RE = /^[A-Z][A-Za-z]*(?:['’-][A-Za-z]+)*$/;
@@ -690,15 +698,37 @@ function analyzeScopeText(text, unknownSet) {
     const contexts = sentenceStats.get(word) || [];
     contexts.sort((a, b) => (a.unknownCount - b.unknownCount) || (b.knownCount - a.knownCount));
     const best = contexts.slice(0, 3);
-    const oneUnknownHits = contexts.filter((c) => c.unknownCount === 1).length;
-    const sentenceScore = contexts.length === 0 ? 0 : (oneUnknownHits / contexts.length);
-    const freqScore = Math.log(1 + count) / Math.log(1 + maxFreq);
-    const score = 0.65 * freqScore + 0.35 * sentenceScore;
+    const score = computeSuggestionScore({
+      count,
+      maxFreq,
+      contexts,
+      freqWeight: SUGGESTION_SCORING.freqWeight,
+      sentenceWeight: SUGGESTION_SCORING.sentenceWeight,
+    });
     rows.push({ word, count, score, examples: best.map((x) => x.sentence) });
   }
 
   rows.sort((a, b) => b.score - a.score || b.count - a.count || a.word.localeCompare(b.word));
   return rows;
+}
+
+function computeSentenceHelpfulnessScore(contexts) {
+  const oneUnknownHits = contexts.filter((c) => c.unknownCount === 1).length;
+  return contexts.length === 0 ? 0 : (oneUnknownHits / contexts.length);
+}
+
+function computeFrequencyScore(count, maxFreq) {
+  return Math.log(1 + count) / Math.log(1 + maxFreq);
+}
+
+function computeSuggestionScore(params) {
+  const sentenceScore = computeSentenceHelpfulnessScore(params.contexts);
+  const freqScore = computeFrequencyScore(params.count, params.maxFreq);
+  return (params.freqWeight * freqScore) + (params.sentenceWeight * sentenceScore);
+}
+
+function computeInlineCardImportance(params) {
+  return (CARD_SCORING.freqWeight * params.freq) + (CARD_SCORING.unknownWeight * params.uncertaintyScore);
 }
 
 function getLexiconEntry(word) {
@@ -828,7 +858,8 @@ function renderReader() {
       const freq = deinflected.filter((x) => x === word).length;
       const idxWord = state.model.wordToIdx.get(word);
       const { p } = effectiveWordBelief(theta, word, idxWord);
-      const importance = 0.7 * freq + 0.3 * (1 - p) / Math.max(1e-6, 1 - threshold);
+      const uncertaintyScore = (1 - p) / Math.max(1e-6, 1 - threshold);
+      const importance = computeInlineCardImportance({ freq, uncertaintyScore });
       return { word, importance };
     }).sort((a, b) => b.importance - a.importance).slice(0, maxCards);
 
