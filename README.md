@@ -2,6 +2,38 @@
 
 Benchmark code and experiment outputs for online vocabulary knowledge estimation.
 
+## Before Deleting a Local Clone
+
+Ignored files are not restored by `git clone`. Before deleting the repository:
+
+1. Confirm that all source changes and reports are committed and pushed:
+
+```bash
+git status -sb
+git push origin master
+```
+
+2. Back up local state that cannot be regenerated:
+
+- `data/user_profiles/`: quiz answers and observed known/unknown labels for local users
+- `.env` and `.env.*`: local configuration or credentials, if present
+
+For example:
+
+```bash
+tar -czf vocabulary-user-profiles.tar.gz data/user_profiles
+```
+
+Copy any `.env` files separately to an appropriate secure location; do not add credentials to Git.
+
+Some profile files may already be tracked from older commits. Check with:
+
+```bash
+git ls-files data/user_profiles
+```
+
+Everything else currently ignored by this repository is either an external download, generated data, a cache, or a local development environment and is covered below.
+
 ## Reproducing Ignored Files
 
 This repository intentionally excludes dependency caches, large external downloads, and generated normalized data products. The committed files keep the source code, tests, docs, compact raw inputs, and produced model/report outputs.
@@ -125,6 +157,60 @@ python -u scripts/prepare_data.py \
 
 That command calls `fasttext.util.download_model("en", if_exists="ignore")`, which downloads `cc.en.300.bin.gz` from the fastText Common Crawl URL and extracts `cc.en.300.bin`.
 
+### Native fastText 12-Dimensional Benchmark Data (`data_ft12`)
+
+`data_ft12/` is an isolated derivative used to benchmark soft groups formed directly from a 12-dimensional fastText model. It is not a separate source dataset. The preparation script loads `cc.en.300.bin` and calls `fasttext.util.reduce_model(model, 12)` before extracting word vectors.
+
+Prerequisites:
+
+- restore `cc.en.300.bin` as described above
+- restore the ignored Duolingo trace file if exact parity with the existing 31,276-word benchmark inventory is required
+- create the Python environment
+
+Recreate the directory:
+
+```bash
+mkdir -p data_ft12/raw/frequency_sources
+cp "data/raw/Responses L2 English speakers to 62 thousand words.xlsx" data_ft12/raw/
+cp data/raw/frequency_sources/subtlex_word_frequencies_index.json \
+  data_ft12/raw/frequency_sources/
+
+.venv/bin/python -u scripts/prepare_data.py \
+  --data-dir data_ft12 \
+  --ehara-raw data/raw/ehara_esl_vocab/responses_raw.csv \
+  --duolingo-raw data/raw/duolingo_hlr/learning_traces.csv.gz \
+  --embedding-backend fasttext \
+  --fasttext-model-path cc.en.300.bin \
+  --fasttext-lang en \
+  --embedding-dim 12 \
+  --skip-downloads \
+  --seed 42
+```
+
+Expected embedding metadata includes:
+
+- `embedding_backend: fasttext`
+- `original_dimension: 300`
+- `dimension: 12`
+
+The L2 grouped-strategy benchmark can then be reproduced with:
+
+```bash
+MPLCONFIGDIR=/tmp/matplotlib PYTHONPATH=src \
+.venv/bin/python scripts/run_l2_grouped_strategy_experiments.py \
+  --data-dir data_ft12 \
+  --out-dir reports/model_improvement_fasttext/l2_grouped_residual_native_fasttext12_smoke \
+  --feature-set fasttext_only \
+  --budgets 100,200,1000 \
+  --groups 12 \
+  --strategies native_fasttext_simplex,kmeans_fasttext,reduced_fasttext_simplex \
+  --reduced-dims 12 \
+  --temperatures 0.10 \
+  --residual-priors 1.00 \
+  --embedding-dim 12 \
+  --seed 42
+```
+
 ### Generated Processed Data
 
 Desired locations:
@@ -202,6 +288,23 @@ Notes:
 
 - `difficulties.csv` includes only word identity fields plus `accuracy` (no external frequency databases).
 - Groupings are regenerated from response patterns across users using grouped residual IRT `Response12` grouping logic with `G=12`.
+- Legacy `data/processed/grouped_residual_q_g12_seed42.csv` and `data/processed/grouped_residual_q_g16_seed42.csv` files are not consumed by current code. They do not need to be restored; use the supported `data/processed/site_data` G=12 export above.
+
+### Vocabulary CLI Cache
+
+Desired location:
+
+- `data/cache/vocab_book_cli/`
+
+This directory contains fitted-model, latent-state, probability, and preprocessed-book caches. It is disposable and should not be backed up. Running `scripts/vocab_book_cli.py` recreates the required entries from processed data, the selected book, and the user profile.
+
+### User Profiles
+
+Desired location:
+
+- `data/user_profiles/`
+
+Profiles contain user-supplied quiz answers and later known/unknown observations. They cannot be inferred from the model or regenerated from raw datasets. Back up any untracked profile files before deleting the local clone. After cloning, restore the files to the same directory; runtime caches will be rebuilt automatically.
 
 ### Runtime Caches and Build Artifacts
 
