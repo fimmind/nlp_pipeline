@@ -171,6 +171,38 @@ python -u scripts/prepare_data.py \
   --synthetic-if-missing
 ```
 
+### Workbook-Only Site Data (`data/processed/site_data`)
+
+If you need site-focused processed data where words/difficulty come from the L2 workbook and soft groups come from response patterns across users, use:
+
+```bash
+.venv/bin/python scripts/generate_site_data_from_l2_workbook.py \
+  --workbook "data/raw/Responses L2 English speakers to 62 thousand words.xlsx" \
+  --out-dir data/processed/site_data \
+  --ehara-raw data/raw/ehara_esl_vocab/responses_raw.csv \
+  --evkd1-raw data/raw/evkd1/responses_raw.csv \
+  --seed 42
+```
+
+This generator depends on:
+
+- `data/raw/Responses L2 English speakers to 62 thousand words.xlsx` (sheet `Words`)
+- columns `spelling` and `accuracy`
+- `data/raw/ehara_esl_vocab/responses_raw.csv` (required for response-pattern grouping)
+- `data/raw/evkd1/responses_raw.csv` (optional; used when present)
+
+It writes:
+
+- `data/processed/site_data/words.csv`
+- `data/processed/site_data/difficulties.csv`
+- `data/processed/site_data/grouped_residual_q_g12_seed42.csv`
+- `data/processed/site_data/metadata.json`
+
+Notes:
+
+- `difficulties.csv` includes only word identity fields plus `accuracy` (no external frequency databases).
+- Groupings are regenerated from response patterns across users using grouped residual IRT `Response12` grouping logic with `G=12`.
+
 ### Runtime Caches and Build Artifacts
 
 Ignored locations:
