@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+from functools import lru_cache
+
 import numpy as np
 import pandas as pd
 from scipy.special import expit
 
 from .base import Estimator, UserState
+
+
+@lru_cache(maxsize=1)
+def _cached_wordnet_lexnames() -> tuple[str, ...]:
+    from nltk.corpus import wordnet as wn
+
+    return tuple(sorted({syn.lexname() for syn in wn.all_synsets()}))
 
 
 class RaschIRTOnlineEstimator(Estimator):
@@ -744,3 +753,392 @@ class Response12GroupedResidualIRTEstimator(Estimator):
         p = self.predict_proba(user_state, candidate_word_ids)
         var = float(user_state.payload.get("var", self.tau_theta * self.tau_theta))
         return p * (1.0 - p) + 0.05 * var
+
+
+class L2AccuracyGroupedResidualIRTEstimator(Estimator):
+    name = "l2_accuracy_grouped_residual_irt"
+
+    def __init__(
+        self,
+        prior_var: float,
+        lr: float,
+        n_fit_steps: int,
+        n_groups: int,
+        grouping_strategy: str,
+        group_temperature: float,
+        residual_prior_var: float,
+        embedding_dim: int,
+        random_state: int,
+        kmeans_n_init: int,
+        gate_c: float,
+        hdbscan_min_cluster_size: int,
+        hdbscan_min_samples: int | None,
+        wordnet_mode: str,
+        reduced_dim: int,
+        accuracy_values: np.ndarray | None = None,
+        word_list: list[str] | None = None,
+    ) -> None:
+        self.prior_var = prior_var
+        self.lr = lr
+        self.n_fit_steps = n_fit_steps
+        self.n_groups = n_groups
+        self.grouping_strategy = grouping_strategy
+        self.group_temperature = group_temperature
+        self.residual_prior_var = residual_prior_var
+        self.embedding_dim = embedding_dim
+        self.random_state = random_state
+        self.kmeans_n_init = kmeans_n_init
+        self.gate_c = gate_c
+        self.hdbscan_min_cluster_size = hdbscan_min_cluster_size
+        self.hdbscan_min_samples = hdbscan_min_samples
+        self.wordnet_mode = wordnet_mode
+        self.reduced_dim = reduced_dim
+        self.accuracy_values = accuracy_values
+        self.word_list = word_list
+        self.b = np.zeros(0, dtype=np.float32)
+        self.group_weights = np.zeros((0, 0), dtype=np.float32)
+        self.group_prior_mean = np.zeros(0, dtype=np.float32)
+        self.group_prior_var = np.zeros(0, dtype=np.float32)
+        self._group_cache_signature: tuple[int, int, float, float] | None = None
+        self._wordnet_vectors_cache: np.ndarray | None = None
+
+    def _load_accuracy_values(self, n_words: int) -> np.ndarray:
+        if self.accuracy_values is not None:
+            values = np.asarray(self.accuracy_values, dtype=np.float64).reshape(-1)
+            if len(values) != n_words:
+                raise ValueError(f"accuracy_values length mismatch: expected {n_words}, got {len(values)}")
+            return values
+        freq = pd.read_csv("data/processed/frequency.csv")
+        if "accuracy" not in freq.columns:
+            raise ValueError("required column missing: data/processed/frequency.csv::accuracy")
+        values = pd.to_numeric(freq["accuracy"], errors="coerce").to_numpy(dtype=np.float64)
+        if len(values) < n_words:
+            raise ValueError(
+                f"insufficient accuracy rows in data/processed/frequency.csv: need {n_words}, got {len(values)}"
+            )
+        return values[:n_words]
+
+    def _row_softmax(self, logits: np.ndarray) -> np.ndarray:
+        shifted = logits - np.max(logits, axis=1, keepdims=True)
+        exp_logits = np.exp(shifted, dtype=np.float64)
+        denom = np.maximum(np.sum(exp_logits, axis=1, keepdims=True), 1e-12)
+        return (exp_logits / denom).astype(np.float32)
+
+    def _normalized_embeddings(self, embeddings: np.ndarray) -> np.ndarray:
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        return embeddings / np.maximum(norms, 1e-8)
+
+    def _build_soft_groups_kmeans_fasttext(self, embeddings: np.ndarray) -> np.ndarray:
+        from sklearn.cluster import KMeans
+
+        norm_embeddings = self._normalized_embeddings(embeddings.astype(np.float32))
+        model = KMeans(n_clusters=self.n_groups, random_state=self.random_state, n_init=self.kmeans_n_init)
+        model.fit(norm_embeddings)
+        centers = model.cluster_centers_.astype(np.float32)
+        centers = self._normalized_embeddings(centers)
+        similarity = norm_embeddings @ centers.T
+        logits = similarity / max(self.group_temperature, 1e-6)
+        return self._row_softmax(logits)
+
+    def _wordnet_lexname_vectors(self, n_words: int) -> np.ndarray:
+        from nltk.corpus import wordnet as wn
+
+        lexnames = list(_cached_wordnet_lexnames())
+        lex_to_idx = {lex: idx for idx, lex in enumerate(lexnames)}
+        if self._wordnet_vectors_cache is not None and self._wordnet_vectors_cache.shape == (n_words, len(lexnames)):
+            return self._wordnet_vectors_cache
+        if self.word_list is not None:
+            if len(self.word_list) != n_words:
+                raise ValueError(f"word_list length mismatch: expected {n_words}, got {len(self.word_list)}")
+            surface = [str(word) for word in self.word_list]
+        else:
+            words = pd.read_csv("data/processed/words.csv")
+            if len(words) < n_words:
+                raise ValueError(f"insufficient words rows in data/processed/words.csv: need {n_words}, got {len(words)}")
+            surface = words["word"].astype(str).head(n_words).tolist()
+        mat = np.zeros((n_words, len(lexnames)), dtype=np.float32)
+        for row_idx, token in enumerate(surface):
+            synsets = wn.synsets(token)
+            if len(synsets) == 0:
+                continue
+            if self.wordnet_mode == "first_synset":
+                synsets = synsets[:1]
+            for syn in synsets:
+                col_idx = lex_to_idx.get(syn.lexname())
+                if col_idx is not None:
+                    mat[row_idx, col_idx] += 1.0
+            row_sum = float(np.sum(mat[row_idx]))
+            if row_sum > 0.0:
+                mat[row_idx] /= row_sum
+        self._wordnet_vectors_cache = mat
+        return mat
+
+    def _build_soft_groups_wordnet_supersense(self, n_words: int, embeddings: np.ndarray) -> np.ndarray:
+        from sklearn.cluster import KMeans
+
+        vectors = self._wordnet_lexname_vectors(n_words)
+        informative_mask = np.sum(vectors, axis=1) > 0
+        if int(np.sum(informative_mask)) < max(4, self.n_groups):
+            # Fallback to embedding clustering if WordNet coverage is too low.
+            return self._build_soft_groups_kmeans_fasttext(embeddings)
+        model = KMeans(n_clusters=self.n_groups, random_state=self.random_state, n_init=self.kmeans_n_init)
+        model.fit(vectors[informative_mask].astype(np.float32))
+        centers = model.cluster_centers_.astype(np.float32)
+        diff = vectors[:, None, :] - centers[None, :, :]
+        dist2 = np.sum(diff * diff, axis=2, dtype=np.float64)
+        logits = -dist2 / max(self.group_temperature, 1e-6)
+        q = self._row_softmax(logits)
+        # Unknown WordNet words get uniform groups.
+        q[~informative_mask] = (1.0 / float(self.n_groups))
+        return q.astype(np.float32)
+
+    def _build_soft_groups_hdbscan_fasttext(self, embeddings: np.ndarray) -> np.ndarray:
+        from sklearn.cluster import HDBSCAN, KMeans
+
+        norm_embeddings = self._normalized_embeddings(embeddings.astype(np.float32))
+        hdb = HDBSCAN(
+            min_cluster_size=max(2, int(self.hdbscan_min_cluster_size)),
+            min_samples=self.hdbscan_min_samples,
+            metric="euclidean",
+            cluster_selection_method="eom",
+        )
+        labels = hdb.fit_predict(norm_embeddings)
+        uniq = sorted([int(label) for label in np.unique(labels).tolist() if int(label) >= 0])
+        if len(uniq) < 2:
+            return self._build_soft_groups_kmeans_fasttext(embeddings)
+
+        label_to_pos = {label: pos for pos, label in enumerate(uniq)}
+        centers = np.zeros((len(uniq), norm_embeddings.shape[1]), dtype=np.float32)
+        for label in uniq:
+            members = norm_embeddings[labels == label]
+            centers[label_to_pos[label]] = np.mean(members, axis=0).astype(np.float32)
+        centers = self._normalized_embeddings(centers)
+        # Compress/expand to exactly n_groups.
+        if centers.shape[0] != self.n_groups:
+            if centers.shape[0] > self.n_groups:
+                km = KMeans(n_clusters=self.n_groups, random_state=self.random_state, n_init=self.kmeans_n_init)
+                km.fit(centers)
+                centers = km.cluster_centers_.astype(np.float32)
+            else:
+                return self._build_soft_groups_kmeans_fasttext(embeddings)
+            centers = self._normalized_embeddings(centers)
+        similarity = norm_embeddings @ centers.T
+        logits = similarity / max(self.group_temperature, 1e-6)
+        return self._row_softmax(logits)
+
+    def _build_soft_groups_reduced_fasttext_simplex(self, embeddings: np.ndarray) -> np.ndarray:
+        from sklearn.decomposition import PCA
+
+        norm_embeddings = self._normalized_embeddings(embeddings.astype(np.float32))
+        target_dim = int(self.reduced_dim)
+        if target_dim <= 1:
+            raise ValueError(f"reduced_dim must be >= 2 for reduced_fasttext_simplex, got {target_dim}")
+        if target_dim != self.n_groups:
+            raise ValueError(
+                "reduced_fasttext_simplex requires reduced_dim == n_groups so each reduced axis is a soft group; "
+                f"got reduced_dim={target_dim}, n_groups={self.n_groups}"
+            )
+        max_dim = int(min(norm_embeddings.shape[0], norm_embeddings.shape[1]))
+        if target_dim > max_dim:
+            raise ValueError(f"reduced_dim={target_dim} exceeds PCA maximum supported dimension={max_dim}")
+
+        reducer = PCA(n_components=target_dim, random_state=self.random_state)
+        reduced = reducer.fit_transform(norm_embeddings.astype(np.float64))
+        logits = reduced / max(self.group_temperature, 1e-6)
+        return self._row_softmax(logits.astype(np.float64))
+
+    def _build_soft_groups_native_fasttext_simplex(self, embeddings: np.ndarray) -> np.ndarray:
+        target_dim = int(self.reduced_dim)
+        if target_dim <= 1:
+            raise ValueError(f"reduced_dim must be >= 2 for native_fasttext_simplex, got {target_dim}")
+        if target_dim != self.n_groups:
+            raise ValueError(
+                "native_fasttext_simplex requires reduced_dim == n_groups; "
+                f"got reduced_dim={target_dim}, n_groups={self.n_groups}"
+            )
+        if embeddings.shape[1] < target_dim:
+            raise ValueError(
+                f"native_fasttext_simplex needs at least {target_dim} embedding dims, got {embeddings.shape[1]}"
+            )
+        base = embeddings[:, :target_dim].astype(np.float64)
+        logits = base / max(self.group_temperature, 1e-6)
+        return self._row_softmax(logits)
+
+    def _build_soft_groups(self, embeddings: np.ndarray, n_words: int) -> np.ndarray:
+        if self.grouping_strategy == "kmeans_fasttext":
+            return self._build_soft_groups_kmeans_fasttext(embeddings)
+        if self.grouping_strategy == "hdbscan_fasttext":
+            return self._build_soft_groups_hdbscan_fasttext(embeddings)
+        if self.grouping_strategy == "wordnet_supersense":
+            return self._build_soft_groups_wordnet_supersense(n_words=n_words, embeddings=embeddings)
+        if self.grouping_strategy == "reduced_fasttext_simplex":
+            return self._build_soft_groups_reduced_fasttext_simplex(embeddings=embeddings)
+        if self.grouping_strategy == "native_fasttext_simplex":
+            return self._build_soft_groups_native_fasttext_simplex(embeddings=embeddings)
+        raise ValueError(f"unknown grouping_strategy={self.grouping_strategy}")
+
+    def _fit_user_group_residual(self, word_ids: np.ndarray, labels: np.ndarray, prior_prob: np.ndarray) -> np.ndarray:
+        if len(word_ids) == 0:
+            return np.zeros(self.n_groups, dtype=np.float32)
+        x = self.group_weights[word_ids].astype(np.float64)
+        y = (labels.astype(np.float64) - prior_prob[word_ids].astype(np.float64)).reshape(-1, 1)
+        ridge = np.eye(self.n_groups, dtype=np.float64) * (1.0 / max(self.residual_prior_var, 1e-6))
+        lhs = x.T @ x + ridge
+        rhs = x.T @ y
+        try:
+            coef = np.linalg.solve(lhs, rhs).reshape(-1).astype(np.float32)
+        except np.linalg.LinAlgError:
+            coef = np.linalg.lstsq(lhs, rhs, rcond=None)[0].reshape(-1).astype(np.float32)
+        return coef
+
+    def fit(self, train_responses: pd.DataFrame, word_features: np.ndarray) -> None:
+        n_words = int(word_features.shape[0])
+        if word_features.shape[1] < self.embedding_dim:
+            raise ValueError(
+                f"word_features must include at least embedding_dim={self.embedding_dim} columns, got shape={word_features.shape}"
+            )
+        raw_accuracy = self._load_accuracy_values(n_words)
+        accuracy = np.where(raw_accuracy > 1.0, raw_accuracy / 100.0, raw_accuracy)
+        accuracy = np.where(np.isnan(accuracy), 0.5, accuracy)
+        prior_p = np.clip(accuracy, 1e-4, 1.0 - 1e-4).astype(np.float64)
+        self.b = (-np.log(prior_p / (1.0 - prior_p))).astype(np.float32)
+
+        embeddings = word_features[:, : self.embedding_dim].astype(np.float32)
+        signature = (
+            int(embeddings.shape[0]),
+            int(embeddings.shape[1]),
+            float(embeddings[0, 0]) if embeddings.size > 0 else 0.0,
+            float(embeddings[-1, -1]) if embeddings.size > 0 else 0.0,
+        )
+        if self._group_cache_signature != signature or self.group_weights.shape != (n_words, self.n_groups):
+            self.group_weights = self._build_soft_groups(embeddings=embeddings, n_words=n_words)
+            self._group_cache_signature = signature
+        self.group_prior_mean = np.zeros(self.n_groups, dtype=np.float32)
+        self.group_prior_var = np.full(self.n_groups, self.residual_prior_var, dtype=np.float32)
+        if train_responses.empty:
+            return
+        prior_prob = expit(-self.b).astype(np.float32)
+        user_vectors: list[np.ndarray] = []
+        for _, user_rows in train_responses.groupby("user_idx"):
+            word_ids = user_rows["word_idx"].to_numpy(dtype=np.int32)
+            labels = user_rows["label"].to_numpy(dtype=np.float32)
+            if len(word_ids) < max(5, self.n_groups // 2):
+                continue
+            user_vectors.append(self._fit_user_group_residual(word_ids, labels, prior_prob))
+        if len(user_vectors) == 0:
+            return
+        stacked = np.vstack(user_vectors).astype(np.float32)
+        self.group_prior_mean = stacked.mean(axis=0).astype(np.float32)
+        var = np.var(stacked, axis=0).astype(np.float32)
+        self.group_prior_var = np.clip(var + 1e-3, 1e-3, 25.0).astype(np.float32)
+
+    def initialize_user_state(self, optional_user_metadata: dict | None = None) -> UserState:
+        del optional_user_metadata
+        return UserState(
+            payload={
+                "theta": 0.0,
+                "var": self.prior_var,
+                "group_residual": np.zeros(self.n_groups, dtype=np.float32),
+                "group_var_mean": float(np.mean(self.group_prior_var)) if self.group_prior_var.size > 0 else float(self.residual_prior_var),
+                "observed_word_ids": np.zeros(0, dtype=np.int32),
+                "observed_labels": np.zeros(0, dtype=np.float32),
+            }
+        )
+
+    def update_user_state(self, user_state: UserState, observed_word_ids: np.ndarray, observed_labels: np.ndarray) -> UserState:
+        prev_ids = np.asarray(user_state.payload.get("observed_word_ids", np.zeros(0, dtype=np.int32)), dtype=np.int32)
+        prev_labels = np.asarray(user_state.payload.get("observed_labels", np.zeros(0, dtype=np.float32)), dtype=np.float32)
+        all_ids = np.concatenate([prev_ids, observed_word_ids.astype(np.int32)])
+        all_labels = np.concatenate([prev_labels, observed_labels.astype(np.float32)])
+        theta = float(user_state.payload.get("theta", 0.0))
+        group_residual = np.asarray(
+            user_state.payload.get("group_residual", np.zeros(self.n_groups, dtype=np.float32)), dtype=np.float64
+        ).reshape(-1)
+        if len(group_residual) != self.n_groups:
+            group_residual = np.zeros(self.n_groups, dtype=np.float64)
+        if len(all_ids) == 0:
+            return UserState(
+                payload={
+                    "theta": theta,
+                    "var": float(user_state.payload.get("var", self.prior_var)),
+                    "group_residual": group_residual.astype(np.float32),
+                    "group_var_mean": float(user_state.payload.get("group_var_mean", np.mean(self.group_prior_var))),
+                    "observed_word_ids": all_ids,
+                    "observed_labels": all_labels,
+                }
+            )
+        gate = float(len(all_ids)) / float(len(all_ids) + self.gate_c)
+        x = (self.group_weights[all_ids].astype(np.float64)) * gate
+        y = all_labels.astype(np.float64)
+        prior_mean = self.group_prior_mean.astype(np.float64)
+        prior_inv_var = 1.0 / np.maximum(self.group_prior_var.astype(np.float64), 1e-6)
+        for _ in range(self.n_fit_steps):
+            logits = theta - self.b[all_ids].astype(np.float64) + x @ group_residual
+            p = expit(logits)
+            w = p * (1.0 - p)
+            err = y - p
+            grad_theta = float(np.sum(err) - theta / self.prior_var)
+            grad_group = x.T @ err - (group_residual - prior_mean) * prior_inv_var
+            h_tt = -float(np.sum(w)) - 1.0 / self.prior_var
+            h_tg = -(x.T @ w)
+            weighted_x = x * w.reshape(-1, 1)
+            h_gg = -(x.T @ weighted_x) - np.diag(prior_inv_var)
+            h = np.zeros((self.n_groups + 1, self.n_groups + 1), dtype=np.float64)
+            h[0, 0] = h_tt
+            h[0, 1:] = h_tg
+            h[1:, 0] = h_tg
+            h[1:, 1:] = h_gg
+            grad = np.concatenate([[grad_theta], grad_group], axis=0)
+            try:
+                delta = np.linalg.solve(h, grad)
+            except np.linalg.LinAlgError:
+                delta = np.linalg.lstsq(h, grad, rcond=None)[0]
+            theta = float(theta - self.lr * delta[0])
+            group_residual = group_residual - self.lr * delta[1:]
+        logits = theta - self.b[all_ids].astype(np.float64) + x @ group_residual
+        p = expit(logits)
+        w = p * (1.0 - p)
+        h_tt = -float(np.sum(w)) - 1.0 / self.prior_var
+        h_tg = -(x.T @ w)
+        weighted_x = x * w.reshape(-1, 1)
+        h_gg = -(x.T @ weighted_x) - np.diag(prior_inv_var)
+        h = np.zeros((self.n_groups + 1, self.n_groups + 1), dtype=np.float64)
+        h[0, 0] = h_tt
+        h[0, 1:] = h_tg
+        h[1:, 0] = h_tg
+        h[1:, 1:] = h_gg
+        fisher = -h
+        try:
+            cov = np.linalg.inv(fisher)
+        except np.linalg.LinAlgError:
+            cov = np.linalg.pinv(fisher)
+        theta_var = float(max(1e-6, cov[0, 0]))
+        group_var_mean = float(max(1e-6, np.mean(np.diag(cov)[1:])))
+        return UserState(
+            payload={
+                "theta": theta,
+                "var": theta_var,
+                "group_residual": group_residual.astype(np.float32),
+                "group_var_mean": group_var_mean,
+                "observed_word_ids": all_ids,
+                "observed_labels": all_labels,
+            }
+        )
+
+    def predict_proba(self, user_state: UserState, candidate_word_ids: np.ndarray) -> np.ndarray:
+        if len(candidate_word_ids) == 0:
+            return np.zeros(0, dtype=np.float32)
+        theta = float(user_state.payload["theta"])
+        group_residual = np.asarray(user_state.payload.get("group_residual", np.zeros(self.n_groups, dtype=np.float32)), dtype=np.float64)
+        obs_count = int(len(np.asarray(user_state.payload.get("observed_word_ids", np.zeros(0, dtype=np.int32)))))
+        gate = float(obs_count) / float(obs_count + self.gate_c)
+        logits = theta - self.b[candidate_word_ids].astype(np.float64) + gate * (
+            self.group_weights[candidate_word_ids].astype(np.float64) @ group_residual
+        )
+        return np.clip(expit(logits).astype(np.float32), 1e-6, 1.0 - 1e-6)
+
+    def predict_uncertainty(self, user_state: UserState, candidate_word_ids: np.ndarray) -> np.ndarray:
+        p = self.predict_proba(user_state, candidate_word_ids)
+        theta_var = float(user_state.payload.get("var", self.prior_var))
+        group_var_mean = float(user_state.payload.get("group_var_mean", self.residual_prior_var))
+        return p * (1.0 - p) + theta_var * 0.05 + group_var_mean * 0.02

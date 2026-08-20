@@ -14,6 +14,7 @@ _EXPORTS: dict[str, str] = {
     "ProbabilityPowerCalibratedEstimator": "calibrated",
     "RaschIRTOnlineEstimator": "irt",
     "GroupedResidualIRTOnlineEstimator": "irt",
+    "L2AccuracyGroupedResidualIRTEstimator": "irt",
     "BasicRaschFromAccuracyEstimator": "irt",
     "TwoPLIRTOnlineEstimator": "irt",
     "GraphLabelPropagationEstimator": "graph",
